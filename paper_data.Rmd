@@ -1,0 +1,264 @@
+---
+title: "paper_data"
+author: "Markus Viljanen"
+date: "2023-08-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r}
+library(readxl)
+library(RPostgreSQL)
+library(plyr)
+library(tidyverse)
+library(sf)
+```
+
+## Original LMF data set to LMF subset
+
+Fetch Netherlands boundaries from RIVM GIS server
+
+```{r}
+conn <- dbConnect(PostgreSQL(), dbname="geodata", user = "ro", password="ro!geo", host = "geodatabase.rivm.nl")
+NL <- st_read(conn, query = "SELECT * FROM nl.adm_wijkbuurt_2022_gen;") %>%
+  filter(indeling == 'gemeente') %>% st_union()
+st_write(NL, "data_paper/NL.shp", append=F)
+```
+
+Abiotic measurements for LMF data
+
+```{r}
+# Abiotic measurements for LMF data 
+LMF.dir <- file.path('LMF', 'LMF data.xlsx')
+df.abiotic <- read_excel(LMF.dir, 1)[-1,-1] %>% distinct(releve_nr, .keep_all=T) %>% 
+  mutate(across(DATE:`N-(NO3+NO2)`,as.numeric)) %>% mutate(NAAM=tolower(str_replace_all(NAAM, " ", "")))
+# Fix some identifier names in abiotic data
+naam <- df.abiotic$NAAM
+# some FR**** and FR**** identifiers were not properly zero padded
+replace.index <- substr(naam,1,2) %in% c("fr", "fl")
+pad.4 <- paste(substr(naam,1,2), str_pad(substr(naam,3,nchar(naam)), 4, pad="0"), sep="")
+df.abiotic[replace.index, "NAAM"] <- pad.4[replace.index]
+# Some GR**** identifiers were GR****/GR****
+replace.index <- grepl('/', df.abiotic$NAAM, fixed = TRUE)
+last.6 <- substr(naam, nchar(naam)-6+1, nchar(naam))
+df.abiotic[replace.index, "NAAM"] <- last.6[replace.index]
+# Lisa's fixes to coordinates 
+# Tostrams, Lisa <lisa.tostrams@rivm.nl>
+df.abiotic.2 <- read.csv('LMF/lmf_log_data_corrected_coords.csv') %>% 
+  distinct(releve_nr, .keep_all=T) %>% 
+  select(releve_nr, `X.coördinaat`, `Y.coördinaat`)
+# Replace coordinates
+df.abiotic <- df.abiotic %>% left_join(df.abiotic.2)  %>% 
+  mutate(Plot = NAAM %>% factor, X = `X.coördinaat`, Y=`Y.coördinaat`) %>%
+  group_by(Plot) %>% filter(DATE == max(DATE)) %>% filter(releve_nr != 203857) #NAAM = nb1019 has two releve_nr in same year
+```
+
+Original LMF data (Species names, Field visit information, Vegatation plots information, Species observations)
+
+```{r}
+# Original LMF data
+# https://longreads.cbs.nl/meetprogrammas-flora-en-fauna-2022/
+
+# Species
+df.species = read.csv('LMF/LMF_Soorten.csv',sep=';', colClasses=c("numeric", "numeric", "factor", "factor")) %>% 
+  select(Soortcode, Nednaam, Wetnaam)
+
+# Visits
+df.visit <- read.csv('LMF/LMF_kop.csv', sep=';', colClasses=c("factor", "numeric", "character", "numeric", "numeric", 
+                                                              "factor", "factor", "factor", "factor", "factor", 
+                                                              "factor", "factor", "factor", "factor", 
+                                                              "numeric", "numeric", "numeric", "factor", "factor", "factor")) %>% 
+  mutate(Datum=as.Date(Datum, format = "%Y%m%d")) %>% 
+  select(Plot, Jaar, Dagnummer, Pq_grootte)
+
+# Plots
+df.plots <- read.csv('LMF/LMF_plot.csv',sep=';', dec=',', colClasses=c("factor", "numeric", "numeric", 
+                                                                       "factor", "factor", "factor", "factor", "factor", 
+                                                                       "factor", "factor", "factor", "factor", "numeric", "factor")) %>%
+  mutate(X=X*1000, Y=Y*1000) %>%
+  #mutate(x = as.numeric(gsub(",", ".", X))*1000,
+  #       y = as.numeric(gsub(",", ".", Y))*1000) %>%
+  select(Plot, X, Y, Fys_geo_regio)
+
+# Observations, take only latest
+df.occurrence <- read.csv('LMF/LMF_tellingen.csv', sep=';', colClasses=c("factor", "numeric", "numeric", "numeric")) %>% 
+  select(Plot, Jaar, Soortcode, Bedekking)
+df.occurrence <- df.occurrence %>% merge(df.species) %>% group_by(Plot) %>% filter(Jaar == max(Jaar))
+
+# Add plot visit date 
+df.extra <- df.occurrence %>% distinct(Plot, Jaar) %>% merge(df.visit)
+df.plots <- df.plots %>% merge(df.extra)
+
+# Add abiotic information
+df.plots <- df.plots %>% full_join(df.abiotic, by="Plot", suffix = c("", ".abiotic")) %>%
+  mutate(X=ifelse(is.na(X), X.abiotic, X),
+         Y=ifelse(is.na(Y), Y.abiotic, Y))
+```
+
+Wieger's proposed species to analyze
+
+```{r}
+# Wamelink, Wieger <wieger.wamelink@wur.nl>
+df.n <- df.occurrence %>% group_by(Nednaam) %>% count() %>% arrange(-n)
+LMF.dir <- file.path('LMF', '8969892_WageningenEnvironmentalResearch_6708PB_20201006_ww3.xlsx')
+species_proposal <- c(read_excel(LMF.dir)$NedNAAM, "Gestreepte witbol", "Struikhei")
+species <- (data.frame(Nednaam=species_proposal) %>% merge(df.n) %>% filter(n>=20) %>% select(Nednaam))$Nednaam
+chosen.species <- data.frame(Nednaam=species[species != "Struikhei"]) %>% 
+  merge(df.species) %>% merge(df.n) %>% select(Nednaam, Wetnaam, n) %>% arrange(-n) 
+```
+
+Overlap statistics:
+
+```{r}
+c1 <- unique(df.abiotic$Plot)
+c2 <- unique(df.visit$Plot)
+cx <- intersect(c1, c2)
+sprintf("Plots: %d abiotic, %d visit, %d intersection", length(c1), length(c2), length(cx))
+
+c1 <- unique(df.abiotic$DATE)
+c2 <- unique(df.visit$Jaar)
+cx <- intersect(c1, c2)
+sprintf("Years: %d abiotic, %d visit, %d intersection", length(c1), length(c2), length(cx))
+
+c1 <- unique(paste(as.character(df.abiotic$Plot), 'x', as.character(df.abiotic$DATE)))
+c2 <- unique(paste(as.character(df.visit$Plot), 'x', as.character(df.visit$Jaar)))
+cx <- intersect(c1, c2)
+sprintf("(Plot,Year)-pairs: %d abiotic, %d visit, %d intersection", length(c1), length(c2), length(cx))
+```
+
+Binary table of each species occurrence at each vegetation plot (0/1)
+
+```{r}
+df.y <- df.occurrence %>% select(Plot, Nednaam, Bedekking) %>% mutate(Bedekking=1) %>% spread(Nednaam, Bedekking, fill=0)
+```
+
+Take only relevant vegetation plot information and join to species occurrence at each plot
+
+```{r}
+df.plots <- df.plots %>% 
+  select(Plot, releve_nr, X, Y, Fys_geo_regio, Jaar, Dagnummer, Pq_grootte, `pH-H20`, ORG_STOF, `C/N`, N_totaal, P_totaal, K_CaCl2) %>% 
+  mutate(across(`pH-H20`:K_CaCl2, function (x) round(x, digits=2))) %>%
+  full_join(df.y[c("Plot", species)])
+```
+
+## Add information, spatial joins with geodata
+
+In codes we use X&Y as km to enforce a vague prior 
+
+```{r}
+NL <- (NL - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+```
+
+Data set of species observations and environmental conditions
+
+```{r}
+sf.plots <- df.plots %>% st_as_sf(coords = c("X","Y"), crs=st_crs(NL))
+st_geometry(sf.plots) <- (sf.plots$geometry - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+sf.plots[c("X", "Y")] <- sf.plots  %>% st_coordinates()
+```
+
+Grid of all possible plots
+
+```{r}
+# Grid with rectangles and their centers  #%>% st_as_sf(crs=st_crs(NL))
+grid.rect <- st_make_grid(NL,n=100,crs=st_crs(NL), what='polygons', square=T) 
+grid.circle <- st_make_grid(NL,n=100,crs=st_crs(NL), what='centers')
+index <- which(lengths(st_within(grid.circle, NL)) > 0) #st_intersects(grid.rect, NL)
+# Create data frame
+sf.grid <- data.frame(grid.circle[index], grid.rect[index]) %>% st_as_sf(crs=st_crs(NL))
+sf.grid[c("X", "Y")] <- sf.grid %>% st_geometry %>% st_centroid() %>% st_coordinates()
+sf.grid$Plot <- factor(sprintf("Grid%d", 1:nrow(sf.grid)))
+```
+
+
+Add GIS layers: province
+
+```{r}
+#https://service.pdok.nl/kadaster/bestuurlijkegebieden/atom/v1_0/bestuurlijke_gebieden.xml
+provincie = st_read("BestuurlijkeGebieden_2023.gpkg", "provinciegebied") %>% select(naam)
+st_geometry(provincie) <- (provincie$geom - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+
+sf.plots <- sf.plots %>% st_join(provincie , left=T, st_within)
+sf.grid <- sf.grid %>% st_join(provincie , left=T, st_within)
+#plot(provincie)
+```
+
+Add GIS layers: FGR regio
+
+```{r}
+# File created by FGR.ipynb
+fgr = st_read("FGR_lmf_mapping.gpkg") %>% select(lmf_indeling)
+st_geometry(fgr) <- (fgr$geom - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+
+sf.plots <- sf.plots %>% st_join(fgr , left=T, st_within)
+sf.grid <- sf.grid %>% st_join(fgr , left=T, st_within)
+#plot(fgr)
+```
+
+Add GIS layers: soiltype, landuse
+
+```{r}
+# https://www.nationaalgeoregister.nl/geonetwork/srv/dut/catalog.search#/metadata/2d3dd6d2-2d2b-4b5f-9e30-86e19ed77a56
+# http://www.geodesk.nl/Grondsoorten.htm
+## takes ~ 5 mins
+landuse <- st_read("bestand_bodemgebruik_2015.gpkg", layer="bestand_bodemgebruik_2015")
+soiltype <- st_read("Grondsoortenkaart-2006.shp")
+landuse <- landuse %>% transmute(bodemgebruik=relevel(factor(bodemgebruik), ref="Bos"))
+soiltype <- soiltype %>% transmute(OMSCHRIJVI=relevel(factor(OMSCHRIJVI), ref="Zand"))
+st_geometry(landuse) <- (landuse$geom - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+st_geometry(soiltype) <- (soiltype$geometry - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+```
+
+```{r}
+## takes ~2 hours
+info.plots <- sf.plots %>% select(Plot)
+info.plots <- info.plots %>% st_join(landuse , left=T, st_within)
+info.plots <- info.plots %>% st_join(soiltype , left=T, st_within)
+info.plots <- info.plots %>% as.data.frame %>% distinct(Plot, bodemgebruik, OMSCHRIJVI)
+#info.plots %>% saveRDS("plot.info.RDS")
+#info.plots <- readRDS("plot.info.RDS")
+sf.plots <- sf.plots %>% merge(info.plots, on="Plot")
+```
+
+```{r}
+## takes ~2 hours
+info.grid <- sf.grid %>% select(Plot)
+info.grid <- info.grid %>% st_join(landuse , left=T, st_within)
+info.grid <- info.grid %>% st_join(soiltype , left=T, st_within)
+info.grid <- info.grid %>% as.data.frame %>% distinct(Plot, bodemgebruik, OMSCHRIJVI)
+#info.grid %>% saveRDS("grid.info.RDS")
+#info.grid <- readRDS("grid.info.RDS")
+# sf.grid %>% merge(info.grid, on="Plot") drops the second geometry, so cbind the correctly sorted auxiliary data
+sf.grid <- cbind(sf.grid, sf.grid %>% as.data.frame %>% select(Plot) %>% merge(info.grid, on="Plot", sort=F) %>% select(bodemgebruik, OMSCHRIJVI)) 
+```
+
+
+Fill very few NA observations with most common category and combine some categories
+
+```{r}
+sf.plots <- sf.plots %>% mutate(
+  bodemgebruik= fct_na_value_to_level(fct_collapse(bodemgebruik, 
+      Bebouwd=c("Bebouwd exclusief bedrijfsterrein", "Bedrijfsterrein", "Semi-bebouwd", "Glastuinbouw"),
+      Spoorterrein=c("Spoorterrein", "Vliegveld")), "Landbouw en overig agrarisch"),
+ OMSCHRIJVI=fct_na_value_to_level(relevel(factor(OMSCHRIJVI), ref="Zand"), "Zand"))
+
+sf.grid <- sf.grid %>% mutate(
+  bodemgebruik=fct_na_value_to_level(fct_collapse(bodemgebruik, 
+      Bebouwd=c("Bebouwd exclusief bedrijfsterrein", "Bedrijfsterrein", "Semi-bebouwd", "Glastuinbouw"),
+      Spoorterrein=c("Spoorterrein", "Vliegveld")), "Landbouw en overig agrarisch"),
+  OMSCHRIJVI=fct_na_value_to_level(relevel(factor(OMSCHRIJVI), ref="Zand"), "Zand"))
+```
+
+Save data
+
+```{r}
+chosen.species %>% write.csv(file="data_paper/chosen_species.csv", row.names=F)
+sf.plots %>% as.data.frame %>% select(-geometry) %>% write.csv(file="data_paper/data_plots.csv", row.names=F)
+sf.grid %>% as.data.frame %>% select(-geometry,-geometry.1) %>% write.csv(file="data_paper/data_grid.csv", row.names=F)
+```
+
