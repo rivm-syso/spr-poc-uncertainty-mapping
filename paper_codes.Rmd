@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Libraries
+For INLA, see: https://www.r-inla.org/download-install
 
 ```{r}
 library(plyr)
@@ -34,6 +35,7 @@ species <- species.map$species
 ```
 
 Netherlands boundary shapefile
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. These coordinates are calculated from the center of the Netherlands in meters. For simplicity, we convert them to kilometers below. 
 
 ```{r}
 NL <- st_read("data_paper/NL.shp")$geometry#st_simplify()
@@ -41,6 +43,7 @@ NL <- (NL - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/10
 ```
 
 Data for vegetation plots and abiotic measurements data
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. 
 
 ```{r}
 # Load field visit data
@@ -51,6 +54,7 @@ sf.plots[c("X", "Y")] <- sf.plots  %>% st_coordinates()
 ```
 
 Data for Netherlands grid
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. 
 
 ```{r}
 # Load Netherlands grid data
@@ -834,6 +838,8 @@ for (species.take in species) { #c("Gestreepte witbol")
 
 
 ## Experiments: training and validation
+It is also possible to download the results from https://zenodo.org/record/8261504
+In that case, place the downloaded files in the subfolder `data_paper/` and go to the `Results: import file` section below to import the results and create the plots. 
 
 ### Provinces 
 
@@ -925,6 +931,7 @@ for (species.take in species) {
 ```  
 
 Joint model (uncertain abiotics), save predictions and prevalences
+ 
 
 ```{r}
 provincies <- sort(unique(sf.plots$naam))
@@ -1024,6 +1031,7 @@ for (species.take in species) {
 
 Two-stage model (certain abiotics), save predictions and prevalences
 
+
 ```{r}
 fgrs <- unique(sf.plots$Fys_geo_regio)
 fgrs <- sort(fgrs[!(fgrs %in% c("gtw", "gtz"))]) # gtw (1) and gtz (5) samples
@@ -1111,6 +1119,7 @@ for (species.take in species) {
 ```  
 
 Joint model (uncertain abiotics), save predictions and prevalences
+
 
 ```{r}
 fgrs <- unique(sf.plots$Fys_geo_regio)
@@ -1210,6 +1219,8 @@ for (species.take in species) {
 ## Combine and export data 
 
 Combine and export the results of fitting all models to data: 
+It is also possible to skip this cell and download the results from https://zenodo.org/record/8261504
+Place the data in the subfolder `data_paper/` and run the code below this cell to create the plots. 
 
 ```{r}
 # Model parameters and predictions in entire data set
@@ -1242,12 +1253,14 @@ c(list.files("prevalences_certain2", full.names=T),
   write.csv(file="data_paper/prevalences_fgr.csv", row.names=F)
 ```
 
-## Results: crowberry example
+## Results: import file  
 
 ```{r}
 results <- read.csv("data_paper/results.csv")
 #results <- read.csv("data_paper/results.csv", col.names=c("species", "meta", "model", "term", "ID", "mean", "sd", "X0.025quant", "X0.5quant", "X0.975quant")) # LSF cluster results
 ```
+
+## Results: crowberry example
 
 ```{r}
 species.take <- "Kraaihei" #Gewoon reukgras, Engels raaigras, Pitrus, Duizendbland, Jacobskruiskruid
