@@ -1,0 +1,1722 @@
+---
+title: "Paper Codes"
+author: "Markus Viljanen"
+date: "2023-08-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+For INLA, see: https://www.r-inla.org/download-install
+
+```{r}
+library(plyr)
+library(tidyverse)
+library(sf)
+library(INLA)
+library(mgcv)
+library(ggplot2)
+library(cowplot)
+library(colorspace)
+library(scales)
+theme_set(theme_bw())
+```
+
+## Data set
+
+Species to analyze and their Latin names
+
+```{r}
+species.map <- read.csv(file="data_paper/chosen_species.csv") %>% transmute(species=Nednaam, name=Wetnaam)
+species <- species.map$species
+```
+
+Netherlands boundary shapefile
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. These coordinates are calculated from the center of the Netherlands in meters. For simplicity, we convert them to kilometers below. 
+
+```{r}
+NL <- st_read("data_paper/NL.shp")$geometry#st_simplify()
+NL <- (NL - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
+```
+
+Data for vegetation plots and abiotic measurements data
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. 
+
+```{r}
+# Load field visit data
+df.plots <- read.csv(file="data_paper/data_plots.csv", check.names = F)
+# Add geometries
+sf.plots <- df.plots %>% st_as_sf(coords = c("X","Y"), crs=st_crs(NL))
+sf.plots[c("X", "Y")] <- sf.plots  %>% st_coordinates()
+```
+
+Data for Netherlands grid
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. 
+
+```{r}
+# Load Netherlands grid data
+df.grid <- read.csv(file="data_paper/data_grid.csv", check.names = F)
+# Grid with rectangles and their centers
+grid.rect <- st_make_grid(NL,n=100,crs=st_crs(NL), what='polygons', square=T) 
+grid.circle <- st_make_grid(NL,n=100,crs=st_crs(NL), what='centers')
+index <- which(lengths(st_within(grid.circle, NL)) > 0) #st_intersects(grid.rect, NL)
+# Add geometries like originally created
+geoms <- data.frame(grid.circle[index], grid.rect[index]) 
+sf.grid <- cbind(df.grid, geoms) %>% st_as_sf(crs=st_crs(NL))
+```
+
+
+## Plot field visits
+
+Translate landuse to English
+
+```{r}
+sf.grid$landuse <- recode(sf.grid$bodemgebruik, "Bos"="Forest", "Bebouwd"="Built", 
+                          "Droog natuurlijk terrein"="Natural terrain (dry)",
+                          "Hoofdweg"="Highway","Landbouw en overig agrarisch"="Agricultural", 
+                          "Nat natuurlijk terrein"= "Natural terrain (wet)", 
+                          "Recreatie"="Recreational", "Spoorterrein"="Railway", "Water"="Water")
+sf.grid$landuse <- fct_relevel(sf.grid$landuse, "Forest", "Natural terrain (dry)", "Natural terrain (wet)", 
+                               "Agricultural", "Recreational", "Highway", "Railway", "Water", "Built")
+sf.plots$landuse <- recode(sf.plots$bodemgebruik, "Bos"="Forest", "Bebouwd"="Built", 
+                          "Droog natuurlijk terrein"="Natural terrain (dry)",
+                          "Hoofdweg"="Highway","Landbouw en overig agrarisch"="Agricultural", 
+                          "Nat natuurlijk terrein"= "Natural terrain (wet)", 
+                          "Recreatie"="Recreational", "Spoorterrein"="Railway", "Water"="Water")
+sf.plots$landuse <- fct_relevel(sf.plots$landuse, "Forest", "Natural terrain (dry)", "Natural terrain (wet)", 
+                               "Agricultural", "Recreational", "Highway", "Railway", "Water", "Built")
+```
+
+Plot landuse in each grid cell:
+
+```{r}
+ggplot(NL) + geom_sf() +
+	geom_sf(aes(geometry=geometry.1, fill=landuse), data=sf.grid) +
+  scale_fill_manual(values=c("Forest"="forestgreen", "Built"="slategrey",
+                             "Natural terrain (dry)"="peru","Natural terrain (wet)"="lightseagreen",
+                             "Highway"="grey","Railway"="seashell2", "Agricultural"="wheat",#
+                             "Recreatie"="lawngreen", "Water"="dodgerblue"
+                             )) +
+	theme(legend.position="right") #+ggtitle('Grid of Netherlands: Landuse') 
+ggsave('results_paper/landuse.png', width=1600, heigh=1200, units='px')
+```
+
+Bar plot of landuse in grid cells vs. vegetation plots:
+
+```{r}
+f.grid <- table(sf.grid$landuse)
+f.plots <- table(sf.plots$landuse)
+f <- rbind(data.frame(f.grid / sum(f.grid), Data='Grid'),
+           data.frame(f.plots / sum(f.plots), Data='Plots'))
+
+ggplot(data=f, aes(x=Var1, y=Freq, fill=Data)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  scale_fill_manual(values=c('#999999','#E69F00')) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  xlab('Landuse') + ylab('% of total') #+ ggtitle('Landuse: Grid of Netherlands vs. Field visits')
+ggsave('results_paper/landuse_vs_visit.png', width=1400, heigh=900, units='px')
+```
+
+
+Plot field visits to vegetation plots and abiotic measurements over the grid:
+
+```{r}
+sf.plots$is_fieldvisit <- !is.na(sf.plots$Dagnummer)
+sf.plots$has_abiotics <- !is.na(sf.plots$releve_nr)
+```
+
+```{r}
+ggplot(NL) + geom_sf() +
+	geom_sf(aes(geometry=geometry.1), data=sf.grid) + 
+	#geom_sf(aes(geometry=geometry), shape=3, size=0.3, data=sf.grid) + 
+	geom_sf(aes(geometry=geometry, color=has_abiotics), shape=4, size=0.5, data=sf.plots) + 
+	theme(plot.title = element_text(hjust = 0.5), legend.title=element_text(size=10), 
+		legend.text=element_text(size=8), legend.position="right") +
+	scale_colour_manual(values=c("#377EB8", "#4DAF4A"), name="Has abiotics") #+ 
+	#ggtitle('Location of Field Visits and Abiotics') 
+ggsave('results_paper/visits.png', width=1400, heigh=1200, units='px')
+
+```
+
+## Spatial interpolation of common heather
+
+Create a mesh over the Netherlands for spatial autocorrelation modelling
+
+```{r}
+step <- 10000 / 1000
+domain <- inla.nonconvex.hull(as.matrix(sf.grid[c("X","Y")])[,1:2], convex=-0.04)
+mesh <- inla.mesh.2d(boundary=domain, max.edge=c(step, step*4), cutoff=step/4)
+```
+
+Illustrate the mesh and common heather (Struikhei) occurrence
+
+```{r}
+
+plot(NL, col="grey", main='Gaussian Markov Random Field')
+plot(mesh, asp=1, add=T)
+rbPal <- colorRampPalette(c('lightyellow','green'))
+col <- rbPal(2)[sf.plots[["Struikhei"]] + 1]
+plot(sf.plots["Struikhei"], pch=21, bg=col, pal=rbPal, cex=0.2, add=T, alpha=0.2)
+legend(-200,150, text.font=4, cex=0.6, legend=c("Not Observed", "Observed"), col=c("lightyellow", "green"), pch=21)#16000, 614000
+```
+
+```{r}
+## Prior: log(range) ~N(0, 10), log(sigma) = N(0,10)
+#range0 <- 1 #exp(10) # ~22 km
+#sigma0 <- 1 # ~2.7
+#kappa0 <- sqrt(8)/range0
+#tau0 <- 1/(sqrt(4*pi)*kappa0*sigma0) #should be 8?
+#spde <- inla.spde2.matern(mesh,alpha=2,
+#                          B.tau=matrix(c(log(tau0), -1, +1), nrow=1, ncol=3),
+#                          B.kappa=matrix(c(log(kappa0), 0, -1), nrow=1, ncol=3),
+#                          theta.prior.mean=c(0,0), theta.prior.prec=c(0.1,0.1))
+#s.index <- inla.spde.make.index(name="spatial.field", n.spde=spde$n.spde) 
+```
+
+Interpolate common heather occurrence in the Netherlands with simple kriging, save zscore of log-odds as pH indicator:
+
+```{r}
+spde <- inla.spde2.matern(mesh=mesh,alpha=2)
+s.index <- inla.spde.make.index(name="spatial.field", n.spde=spde$n.spde) 
+
+A_y <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.plots %>% as.data.frame %>% select(X,Y)))
+A_pred <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.grid %>% as.data.frame %>% select(X,Y)))
+
+stack.est <- inla.stack(data=list(y = sf.plots[["Struikhei"]]),
+                        A=list(A_y), effects=list(c(s.index, list(intercept=1))), 
+                        tag="est")
+stack.pred <- inla.stack(data=list(y=NA), 
+                         A=list(A_pred), effects=list(c(s.index, list(intercept=1))),
+                         tag="pred") 
+joint.stack <- inla.stack(stack.est, stack.pred)
+
+formula <- y ~ -1 + intercept + f(spatial.field, model=spde)
+
+output.stack <- inla(formula, family="binomial", 
+               data=inla.stack.data(joint.stack, spde=spde),
+               control.predictor=list(A=inla.stack.A(joint.stack), compute=TRUE, link=1))
+
+# Save extrapolated Struikhei as indicator of pH
+plot.indicator <- output.stack$summary.linear.predictor[inla.stack.index(joint.stack, tag="est")$data,"mean"]
+grid.indicator <- output.stack$summary.linear.predictor[inla.stack.index(joint.stack, tag="pred")$data,"mean"]
+sf.plots$pHindicator <- (plot.indicator - mean(grid.indicator))/sd(grid.indicator)
+sf.grid$pHindicator <- (grid.indicator - mean(grid.indicator))/sd(grid.indicator)
+```
+
+Plot observed vs. predicted common heather prevalence
+
+```{r}
+# Calculate observed Strukhei at each grid point
+results <- sf.grid %>% st_set_geometry("geometry.1") %>% 
+  st_join(sf.plots%>%select(`Struikhei`), st_contains) %>% 
+  group_by(geometry.1) %>% summarize(Struikhei=mean(`Struikhei`, na.rm=T))
+# Save predicted Strukhei at each grid point
+index.pred.response <- inla.stack.index(joint.stack, tag="pred")$data
+results$Struikhei.mean <- output.stack$summary.fitted.values[index.pred.response, "mean"]
+results$Struikhei.sd <- output.stack$summary.fitted.values[index.pred.response,"sd"]
+
+plot1 <- ggplot(NL) + geom_sf() +
+	geom_sf(aes(geometry=geometry.1, fill=Struikhei), data=results) + 
+  scale_fill_gradient(low="lightyellow", high="green", limits=c(0,1))+
+	ggtitle('Observed Struikhei') + theme(legend.position="bottom")
+
+plot2 <- ggplot(NL) + geom_sf() +
+	geom_sf(aes(geometry=geometry.1, fill=Struikhei.mean), data=results) + 
+  scale_fill_gradient(low="lightyellow", high="green", limits=c(0,1))+
+	ggtitle('Predicted Struikhei') + theme(legend.position="bottom")
+
+plot_grid(plot1, plot2, nrow = 1)
+ggsave('results_paper/Struikhei.png', width=2000, heigh=1400, units='px')
+```
+
+
+## Spatial interpolation of pH
+
+Illustrate the mesh and pH measurements:
+
+```{r}
+plot(NL, col="grey", main='Gaussian Markov Random Field')
+plot(mesh, asp=1, add=T)
+rbPal <- colorRampPalette(c('blue','red'))
+col <- rbPal(10)[as.numeric(cut(sf.plots[["pH-H20"]],breaks = 10))]
+plot(sf.plots["pH-H20"], pch=21, bg=col, pal=rbPal, cex=0.5, add=T)
+legend(-200,150, text.font=4, cex=0.6, legend=c("Low", "High"), col=c("blue", "red"), pch=21)#16000, 614000
+```
+
+Interpolate pH in the Netherlands with kriging using soil type, landuse, and indicator plant (common heather) as covariates
+
+```{r}
+A_y <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.plots %>% as.data.frame %>% select(X,Y)))
+A_pred <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.grid %>% as.data.frame %>% select(X,Y)))
+
+stack.est <- inla.stack(data=list(y = sf.plots[["pH-H20"]]),
+                        A=list(A_y,1,1,1), effects=list(c(s.index, list(intercept=1)),
+                                                  list(OMSCHRIJVI = sf.plots$OMSCHRIJVI),
+                                                  list(bodemgebruik = sf.plots$bodemgebruik),
+                                                  list(pHindicator = sf.plots$pHindicator)), 
+                        tag="est")
+stack.pred <- inla.stack(data=list(y=NA), 
+                         A=list(A_pred,1,1,1), effects=list(c(s.index, list(intercept=1)),
+                                                          list(OMSCHRIJVI = sf.grid$OMSCHRIJVI),
+                                                          list(bodemgebruik = sf.grid$bodemgebruik),
+                                                          list(pHindicator = sf.grid$pHindicator)),
+                         tag="pred") 
+joint.stack <- inla.stack(stack.est, stack.pred)
+
+formula <- y ~ -1 + intercept + OMSCHRIJVI + bodemgebruik + pHindicator +f(spatial.field, model=spde) #+bodemgebruik
+
+output.stack <- inla(formula, family="gaussian", 
+               data=inla.stack.data(joint.stack, spde=spde),
+               #control.fixed = list(expand.factor.strategy = "inla"),
+               control.predictor=list(A=inla.stack.A(joint.stack), compute=TRUE))
+
+output.field <- inla.spde2.result(inla=output.stack, name="spatial.field", spde=spde, do.transf=TRUE)
+```
+
+Illustrate the model parameters: intercept, measurement error, spatial variance and spatial range
+
+```{r}
+### Plot posterior distributions
+par(mfrow=c(2,2))
+# Plot for beta0
+xrange <- range(output.stack$marginals.fix[[1]][,1])
+yrange <- range(output.stack$marginals.fix[[1]][,2])
+plot(output.stack$marginals.fix[[1]], type='l', xlim=xrange, ylim=yrange, xlab=expression(b[0]),ylab="")
+
+# Plot for the variance sigma2e
+s2e.marg <- inla.tmarginal(function(x) 1/x, output.stack$marginals.hy[[1]])
+xrange <- range(s2e.marg[,1])
+yrange <- range(s2e.marg[,2])
+plot.default(s2e.marg, type='l', xlim=xrange, ylim=yrange, xlab=expression(sigma[e]^2),ylab="")
+
+# Plot for the variance sigma2
+xrange <- range(output.field$marginals.variance.nominal[[1]][,1])
+yrange <- range(output.field$marginals.variance.nominal[[1]][,2])
+plot(output.field$marginals.variance.nominal[[1]], type='l', xlim=xrange, ylim=yrange, xlab=expression(sigma^2),ylab="")
+
+#Plot for the range
+xrange <- range(output.field$marginals.range.nominal[[1]][,1])
+yrange <- range(output.field$marginals.range.nominal[[1]][,2])
+plot(output.field$marginals.range.nominal[[1]], type='l', xlim=xrange, ylim=yrange, xlab=expression(r),ylab="")
+
+```
+
+Plot observed vs. predicted pH
+
+```{r}
+# Calculate observed pH at each grid point
+results <- sf.grid %>% st_set_geometry("geometry.1") %>% 
+  st_join(sf.plots%>%select(`pH-H20`), st_contains) %>% 
+  group_by(geometry.1) %>% summarize(pH=mean(`pH-H20`, na.rm=T))
+# Save predicted pH at each grid point
+index.pred.response <- inla.stack.index(joint.stack, tag="pred")$data
+results$pH.mean <- output.stack$summary.fitted.values[index.pred.response,"mean"]
+results$pH.sd <- output.stack$summary.fitted.values[index.pred.response,"sd"]
+
+# Plot (ggplot)
+plot1 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=pH), data=results) + 
+  scale_fill_gradient2(low='red', midpoint=7, high='blue') + ggtitle('Observed pH') + theme(legend.position="bottom")
+plot2 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=pH.mean), data=results) + 
+  scale_fill_gradient2(low='red', midpoint=7, high='blue') + ggtitle('Predicted pH') + theme(legend.position="bottom")
+#plot_grid(plot1, plot2, nrow = 1) + theme(plot.background = element_rect(fill = "white", colour = NA)) #, plot3
+#ggsave('results_paper/pH.png', width=2000, heigh=1400, units='px')
+
+plot.all <- ggdraw() +
+  draw_plot(plot1, x = 0, y = 0, width = 0.50, height = 0.95) +
+  draw_plot(plot2, x = 0.50, y = 0, width = 0.50, height = 0.95) +
+  draw_plot_label(label = c("A", "B"), size = 15, x = c(0.01, 0.50), y = c(0.99,0.99)) +
+  theme(plot.background = element_rect(fill = "white", colour = NA))
+plot.all
+ggsave('results_paper/pH.png', width=2000, heigh=1400, units='px')
+```
+
+Same plot with a third panel visualizing uncertainty of interpolated pH
+
+```{r}
+plot3 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=pH.sd), data=results) + 
+  scale_fill_gradient(low='white', high='red', limits=c(0,1.11)) + ggtitle('Uncertainty pH') + theme(legend.position="bottom")
+plot_grid(plot1, plot2, plot3, nrow = 1) + theme(plot.background = element_rect(fill = "white", colour = NA)) #, plot3
+ggsave('results_paper/pH2.png', width=3000, heigh=1400, units='px')
+```
+
+Save interpolated pH for modelling
+
+```{r}
+index.pred.response <- inla.stack.index(joint.stack, tag="est")$data
+sf.plots$pH <- output.stack$summary.fitted.values[index.pred.response,"mean"]
+index.pred.response <- inla.stack.index(joint.stack, tag="pred")$data
+sf.grid$pH <- output.stack$summary.fitted.values[index.pred.response,"mean"]
+```
+
+Histogram of pH in grid cells vs. vegetation plots
+
+```{r}
+f <- rbind(data.frame(pH = sf.grid$pH, Data='Grid'),
+           data.frame(pH = sf.plots$pH, Data='Plots'))
+
+ggplot(f, aes(x=pH, fill=Data)) +
+  geom_histogram(aes(y=after_stat(density)), bins=50, position="dodge") +
+  scale_fill_manual(values=c('#999999','#E69F00')) 
+
+```
+
+## Process data
+
+Marginal distribution statistics:
+
+```{r}
+n <- sum(sf.plots$is_fieldvisit)
+sf.plots %>% as.data.frame %>% transmute(
+  is_fieldvisit, has_abiotics, Dagnummer = Dagnummer, 
+  pH = pH, ORG_STOF = log(ORG_STOF), CN = log(`C/N`), 
+  N_totaal = log(N_totaal), P_totaal = log(P_totaal),
+  K_CaCl2 = log(ifelse(K_CaCl2<=0, 0.1, K_CaCl2))) %>%
+  summarize(across(all_of(c('Dagnummer', 'pH', 'ORG_STOF', 'CN','N_totaal', 'P_totaal', 'K_CaCl2')), 
+                   list(mean=function(x) mean(x,na.rm=T), sd=function(x) sd(x,na.rm=T),
+                        available = function(x) sum(!is.na(x) & is_fieldvisit)/n))) %>% round(2)
+```
+Z-score abiotic variables and clip extreme outliers to ensure equal impact of priors 
+
+```{r}
+to_zscore <- function(x) (x - mean(x, na.rm=T))/sd(x, na.rm=T)
+zclip <- function(x) ifelse(x > 3, 3, ifelse(x < -3, -3, x))
+
+pH.mean = 7 #mean(sf.plots$pH)
+pH.sd = 1 #sd(sf.plots$pH)
+
+sf.plots <- sf.plots %>% mutate(
+ Pq_grootte=replace_na(Pq_grootte, 25),
+ Dagnummer = replace_na(Dagnummer, 200),
+ Dagnummer.z = (Dagnummer-200)/30.44, 
+ pH.z = zclip((pH - pH.mean)/pH.sd), 
+ ORG_STOF.z = zclip(to_zscore(log(ORG_STOF))), 
+ CN.z = zclip(to_zscore(log(`C/N`))),
+ N_totaal.z = zclip(to_zscore(log(N_totaal))), 
+ P_totaal.z = zclip(to_zscore(log(P_totaal))), 
+ K_CaCl2.z = zclip(to_zscore(log(ifelse(K_CaCl2<=0, 0.1, K_CaCl2)))) 
+)
+
+sf.grid <- sf.grid %>% mutate(
+ Dagnummer=200, Pq_grootte=25,
+ Dagnummer.z = (Dagnummer-200)/30.44, 
+ pH.z =  zclip((pH - pH.mean)/pH.sd)
+)
+
+```
+
+Landuse coding for the spline
+
+```{r}
+code_terrain <- function (x) switch(x, "Bos"=-4, "Droog natuurlijk terrein"=-3, "Nat natuurlijk terrein"=-2, "Water"=-1,
+                                     "Recreatie"=0, "Spoorterrein"=1, "Hoofdweg"=2,  "Bebouwd"=3, "Landbouw en overig agrarisch"=4)
+sf.plots$terrain <- sapply(sf.plots$bodemgebruik %>% as.character, code_terrain)
+sf.grid$terrain <- sapply(sf.grid$bodemgebruik %>% as.character, code_terrain)
+```
+
+Matching coordinate matrix
+
+```{r}
+xy.plots <- sf.plots %>% as.data.frame %>% select(X,Y)
+xy.grid <- sf.grid %>% as.data.frame %>% select(X,Y)
+```
+
+For the cluster use these pre-processed files
+
+```{r}
+sf.plots %>% saveRDS("sf.plots.RDS")
+sf.grid %>% saveRDS("sf.grid.RDS")
+```
+
+
+## Experiments: fit both models to data
+
+Uniform mesh for the spatial component
+
+```{r}
+step <- 10000 / 1000
+domain <- inla.nonconvex.hull(as.matrix(xy.plots), convex=-0.04)
+mesh <- inla.mesh.2d(boundary=domain, max.edge=c(step*2, step*4), cutoff=step)
+```
+
+```{r}
+spde <- inla.spde2.matern(mesh=mesh,alpha=2)##print(spde$n.spde)
+s.index <- inla.spde.make.index(name="spatial.field", n.spde=spde$n.spde) 
+
+A_y <- inla.spde.make.A(mesh=mesh, loc=as.matrix(xy.plots))
+A_pred <- inla.spde.make.A(mesh=mesh, loc=as.matrix(xy.grid))
+```
+
+### Two-stage model
+
+Predict missing abiotic variables
+
+```{r}
+terms.abiotics <- list()
+i <- 1
+for (variable in c("ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z")) {
+  print(variable)
+
+  stack.est <- inla.stack(data=list(y = sf.plots[[variable]]),
+                          A=list(A_y), effects=list(c(s.index, list(intercept=1))), 
+                          tag="est")
+  stack.pred <- inla.stack(data=list(y=NA), 
+                           A=list(A_pred), effects=list(c(s.index, list(intercept=1))),
+                           tag="pred") 
+  join.stack <- inla.stack(stack.est, stack.pred)
+  
+  formula <- y ~ -1 + intercept + f(spatial.field, model=spde)
+  
+  output <- inla(formula, family="gaussian", 
+                      data=inla.stack.data(join.stack, spde=spde),
+                      control.predictor=list(A=inla.stack.A(join.stack), compute=TRUE, link=1))
+  
+  # predictions at field visits
+  index.est <- inla.stack.index(join.stack, tag="est")$data
+  variable.est <- output$summary.fitted.values[index.est,]
+  colnames(variable.est) <- sprintf("%s.%s", variable, colnames(variable.est))
+  sf.plots[colnames(variable.est)] <- variable.est
+
+  # predictions at grid
+  index.pred <- inla.stack.index(join.stack, tag="pred")$data
+  variable.pred <- output$summary.fitted.values[index.pred,]
+  colnames(variable.pred) <- sprintf("%s.%s", variable, colnames(variable.pred))
+  sf.grid[colnames(variable.pred)] <- variable.pred
+
+  # transform posterior marginal of precision into variance and calculate statistics
+  i_field <- inla.spde2.result(output, name="spatial.field", spde)
+  var.marginal <- data.frame(inla.zmarginal(inla.tmarginal(function(x) log(1/x), output$marginals.hyperpar[[1]]), silent=T)) %>%
+    rename(mean=mean, sd=sd, `0.025quant`=quant0.025, `0.25quant`=quant0.25, `0.5quant`=quant0.5, `0.75quant`=quant0.75, `0.975quant`=quant0.975)
+  # predictions
+  cols <- sprintf(c("%s.mean", "%s.sd", "%s.0.025quant", "%s.0.5quant", "%s.0.975quant"), variable)
+  i.pred <- sf.grid %>% as.data.frame %>% select(all_of(cols))
+  colnames(i.pred) <- c("mean", "sd", "0.025quant", "0.5quant", "0.975quant")
+  
+  # Abiotic factor regression terms and predictions
+  terms.abiotics[[variable]] <- rbind(
+  	# Intercept
+  	output$summary.fixed %>% 
+  		mutate(ID=row.names(output$summary.fixed)) %>% remove_rownames %>% mutate(term="fixed") %>% 
+  		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    # Precision
+  	var.marginal %>% 
+  		mutate(ID="log.variance.eps") %>% remove_rownames %>% mutate(term="spatial") %>% 
+  		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+  	# Spatial component
+  	bind_rows(list(log.variance=i_field$summary.log.variance.nominal, 
+  	               log.range=i_field$summary.log.range.nominal), .id="ID") %>% 
+  	  remove_rownames %>% mutate(term="spatial") %>% 
+  		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    # Predictions
+    cbind(sf.grid %>% as.data.frame %>% mutate(term="Predict", ID=Plot), i.pred) %>% 
+    select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+  	)
+  i <- i + 1
+}
+
+terms.abiotics <- bind_rows(terms.abiotics, .id="model") %>% 
+  mutate(species="", meta="Certain") %>%
+  select(species, meta, model, term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+  
+write.table(terms.abiotics, "results_certain/abiotics.csv", sep = ",", col.names = T, row.names=F, append=F)
+```
+
+Visualization of predicted abiotic variables
+
+```{r}
+for (var in c("ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z")) {
+  var.mean <- sprintf("%s.mean", var)
+  var.sd <- sprintf("%s.sd", var)
+  
+  # Take predicted abiotic in the grid and observed in the plot
+  results <- sf.grid %>% select(geometry.1, var.mean,  var.sd) %>% st_set_geometry("geometry.1") %>%
+    st_join(sf.plots %>% select(geometry, var), st_contains) %>% group_by(geometry.1) %>% summarize(
+      y.mean=mean(get(var.mean), na.rm=T), 
+      y.sd=mean(get(var.sd), na.rm=T), 
+      y=mean(get(var), na.rm=T)
+      )
+  
+  # Plot (ggplot)
+  plot1 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=y), data=results) + 
+    scale_fill_gradient2(low='blue', midpoint=0, high='red', limits=c(-3,3)) + 
+    ggtitle(sprintf('Observed %s', var)) + theme(legend.position="bottom")
+  plot2 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=y.mean), data=results) + 
+    scale_fill_gradient2(low='blue', midpoint=0, high='red', limits=c(-3,3)) + 
+    ggtitle(sprintf('Predicted %s', var)) + theme(legend.position="bottom")
+  plot3 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=y.sd), data=results) + 
+    scale_fill_gradient(low='white', high='red', limits=c(0,1)) + #scale_fill_gradient(low='darkblue', high='yellow', limits=c(0,1)) + 
+    ggtitle(sprintf('Uncertainty %s', var)) + theme(legend.position="bottom")
+  plot_grid(plot1, plot2, plot3, nrow = 1)
+}
+```
+
+Fit the two-stage model using predicted abiotic variables, save model parameters and predictions
+
+```{r}
+
+for (species.take in species) { #c("Gestreepte witbol")
+  print(species.take)
+  
+  start <- Sys.time()
+  stk_y <- inla.stack(data = list(y=sf.plots[[species.take]]),
+                A = list(A_y, 1, 1, 1, 1, 1, 1, 1, 1), 
+                effects = list(c(list(u.field=1:spde$n.spde), list(intercept=1)), 
+                               list(terrain=sf.plots$terrain), 
+                               list(Dagnummer.z=sf.plots$Dagnummer.z), 
+                               list(pH.z=sf.plots$pH.z), 
+                               list(ORG_STOF.z=sf.plots$ORG_STOF.z.mean),
+                               list(CN.z=sf.plots$CN.z.mean), 
+                               list(N_totaal.z=sf.plots$N_totaal.z.mean), 
+                               list(P_totaal.z=sf.plots$P_totaal.z.mean), 
+                               list(K_CaCl2.z=sf.plots$K_CaCl2.z.mean)
+                               ),
+                tag="est.y")
+  
+  n <- nrow(sf.grid)
+  stk_pred <- inla.stack(data=list(y=rep(NA, n)),  
+                          effects=list(c(list(u.field=1:spde$n.spde), list(intercept=1)),
+                                       list(terrain=sf.grid$terrain), 
+                                       list(Dagnummer.z=sf.grid$Dagnummer.z), 
+                                       list(pH.z=sf.grid$pH.z), 
+                                       list(ORG_STOF.z=sf.grid$ORG_STOF.z.mean),
+                                       list(CN.z=sf.grid$CN.z.mean), 
+                                       list(N_totaal.z=sf.grid$N_totaal.z.mean), 
+                                       list(P_totaal.z=sf.grid$P_totaal.z.mean), 
+                                       list(K_CaCl2.z=sf.grid$K_CaCl2.z.mean)
+                               ),
+                          A=list(A_pred, 1, 1, 1, 1, 1, 1, 1, 1),
+                          tag="est.pred")
+  
+  stk <- inla.stack(stk_y, stk_pred)
+  
+  formula <- y ~ -1 + intercept + f(inla.group(terrain), model = "rw2") + 
+    f(inla.group(Dagnummer.z), model = "rw2") +  f(inla.group(pH.z), model = "rw2") +
+    CN.z + ORG_STOF.z + N_totaal.z + P_totaal.z + K_CaCl2.z + f(u.field, model=spde)
+
+  output <-  tryCatch(
+        {inla(formula, num.threads = 1,
+                  data=inla.stack.data(stk, spde=spde), family="binomial",
+                  control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=1), #
+                  control.inla = list(strategy = "adaptive", int.strategy = "eb")) #int.strategy = "eb"
+        }, error = function(cond) 
+            {message(cond)
+            return(NULL)}
+    )
+  
+  # Model results
+  if (!is.null(output)) {
+    u_field <- inla.spde2.result(output, name="u.field", spde)
+    index.pred <- inla.stack.index(stk, tag="est.pred")$data
+    
+    # SDM regression terms and predictions
+    terms.sdm <- rbind(
+      # Splines for day number, pH, terrain
+    	bind_rows(output$summary.random, .id="term") %>% 
+    			filter(term %in% c("inla.group(Dagnummer.z)", "inla.group(pH.z)", "inla.group(terrain)")) %>% 
+    	    mutate(term=str_replace_all(term, c("inla.group\\("="", "\\)"=""))) %>% 
+    			select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    	# Linear terms for CN, ORG_STOF, N_totaal, P_totaal, K_CaCl2
+    	output$summary.fixed %>% 
+    		mutate(ID=row.names(output$summary.fixed)) %>% remove_rownames %>% mutate(term="fixed") %>% 
+    		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    	# Spatial component
+    	bind_rows(list(log.variance=u_field$summary.log.variance.nominal, 
+    	               log.range=u_field$summary.log.range.nominal), .id="ID") %>% 
+    	  remove_rownames %>% mutate(term="spatial") %>% 
+    		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+      # Predictions
+    	cbind(sf.grid %>% as.data.frame %>% mutate(term="Predict", ID=Plot), 
+                       output$summary.fitted.values[index.pred,]) %>% 
+      select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+      # Predictions (log-odds scale)
+    	cbind(sf.grid %>% as.data.frame %>% mutate(term="APredict", ID=Plot), 
+                       output$summary.linear.predictor[index.pred,]) %>% 
+      select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+    ) %>% 
+      mutate(species=species.take, meta="Certain", model = "SDM") %>%
+      select(species, meta, model, term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+    
+    # Save
+    terms <- rbind(terms.sdm)#, terms.abiotics %>% mutate(species=species.take)
+    fn <- sprintf('results_certain/%s.csv', species.take)
+    write.table(terms, fn, sep = ",", col.names = T, row.names=F, append=F)
+    #write.table(terms, "results_certain.csv", sep = ",", col.names = !file.exists("results_certain.csv"), row.names=F, append=T)
+  }
+  
+  end <- Sys.time()
+  print(end-start)
+}
+```
+
+
+### Joint model
+
+Construct a separate model for each abiotic variable:
+
+```{r}
+variables <- c("ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z")
+
+i <- 1
+stacks <- list()
+for (var in variables) {
+  # Observations of the variable
+  sf.var <- sf.plots %>% filter(!is.na(get(var)))
+  A_var <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.var %>% as.data.frame %>% select(X,Y)))
+  # One output for every estimated variable (+ species occurrence)
+  y <- matrix(nrow=nrow(sf.var), ncol=length(variables) + 1)
+  y.0 <- matrix(nrow=nrow(sf.grid), ncol=length(variables) + 1)
+  y[,i] <- sf.var[[var]]
+  # Stack
+  effects <- list()
+  effects[[sprintf("%s.i.field", var)]] = 1:spde$n.spde
+  effects[[sprintf("%s.intercept", var)]] = 1 
+  stacks[[var]] <- inla.stack(data=list(y=y), effects=list(effects), A=list(A_var), tag=sprintf("est.%s", var))
+  stacks[[sprintf("%s.pred", var)]] <- inla.stack(data=list(y=y.0), effects=list(effects), A=list(A_pred), tag=sprintf("est.pred.%s", var))
+  i <- i + 1
+}
+```
+
+Fit the joint model using models for abiotic variables, save model parameters and predictions
+
+```{r}
+
+for (species.take in species) { #c("Gestreepte witbol")
+  print(species.take)
+  
+  start <- Sys.time()
+  # Species occurrence
+  y <- matrix(nrow=nrow(sf.plots), ncol=length(variables) + 1)
+  y[,i] <- sf.plots[[species.take]]
+  # Stack
+  stk_y <- inla.stack(data=list(y=y),  
+                          effects=list(c(list(ORG_STOF.z.field=1:spde$n.spde, 
+                                              CN.z.field=1:spde$n.spde,
+                                              N_totaal.z.field=1:spde$n.spde, 
+                                              P_totaal.z.field=1:spde$n.spde, 
+                                              K_CaCl2.z.field=1:spde$n.spde,
+                                              u.field=1:spde$n.spde), list(intercept=1)),
+                                       list(terrain=sf.plots$terrain), 
+                                       list(Dagnummer.z=sf.plots$Dagnummer.z), 
+                                       list(pH.z=sf.plots$pH.z)),
+                          A=list(A_y, 1, 1, 1),
+                          tag="est.y")
+  # Predicted over grid
+  y <- matrix(nrow=nrow(sf.grid), ncol=length(variables) + 1)
+  stk_pred <- inla.stack(data=list(y=y),  
+                          effects=list(c(list(ORG_STOF.z.field=1:spde$n.spde, 
+                                              CN.z.field=1:spde$n.spde,
+                                              N_totaal.z.field=1:spde$n.spde, 
+                                              P_totaal.z.field=1:spde$n.spde, 
+                                              K_CaCl2.z.field=1:spde$n.spde,
+                                              u.field=1:spde$n.spde), list(intercept=1)),
+                                       list(terrain=sf.grid$terrain), 
+                                       list(Dagnummer.z=sf.grid$Dagnummer.z), 
+                                       list(pH.z=sf.grid$pH.z)),
+                          A=list(A_pred, 1, 1, 1),
+                          tag="est.pred")
+  
+  stk <- inla.stack(stacks[["ORG_STOF.z"]], stacks[["ORG_STOF.z.pred"]],
+                    stacks[["CN.z"]], stacks[["CN.z.pred"]], 
+                    stacks[["N_totaal.z"]], stacks[["N_totaal.z.pred"]],
+                    stacks[["P_totaal.z"]], stacks[["P_totaal.z.pred"]],
+                    stacks[["K_CaCl2.z"]], stacks[["K_CaCl2.z.pred"]],
+                    stk_y, stk_pred)
+  
+  formula <- y ~ -1 + intercept + ORG_STOF.z.intercept + CN.z.intercept + N_totaal.z.intercept + P_totaal.z.intercept + K_CaCl2.z.intercept +
+    f(inla.group(terrain), model = "rw2") + f(inla.group(Dagnummer.z), model = "rw2") +  f(inla.group(pH.z), model = "rw2") + 
+    f(ORG_STOF.z.i.field, model=spde) + f(ORG_STOF.z.field, copy="ORG_STOF.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+    f(CN.z.i.field, model=spde) + f(CN.z.field, copy="CN.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+    f(N_totaal.z.i.field, model=spde) + f(N_totaal.z.field, copy="N_totaal.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001))))  +
+    f(P_totaal.z.i.field, model=spde) + f(P_totaal.z.field, copy="P_totaal.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001))))  +
+    f(K_CaCl2.z.i.field, model=spde) + f(K_CaCl2.z.field, copy="K_CaCl2.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+    f(u.field, model=spde)
+  
+  families <- c(rep("gaussian", length(variables)), "binomial")
+
+  output <-  tryCatch(
+        {inla(formula, family=families, num.threads=1,
+                 data=inla.stack.data(stk), 
+                 control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=i),
+                 control.inla = list(strategy = "adaptive", int.strategy = "eb"))#int.strategy = "eb"
+        }, error = function(cond) 
+            {message(cond)
+            return(NULL)}
+    )
+  
+  # Model results
+  if (!is.null(output)) {
+    # random field and index in stack
+    u_field <- inla.spde2.result(output, name="u.field", spde)
+    index.pred <- inla.stack.index(stk, tag="est.pred")$data
+    
+    # SDM regression terms and predictions
+    terms.sdm <- rbind(
+      # Splines for day number, pH, terrain
+    	bind_rows(output$summary.random, .id="term") %>% 
+    			filter(term %in% c("inla.group(Dagnummer.z)", "inla.group(pH.z)", "inla.group(terrain)")) %>% 
+    	    mutate(term=str_replace_all(term, c("inla.group\\("="", "\\)"=""))) %>% 
+    			select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    	# Intercept
+    	output$summary.fixed %>% 
+    		mutate(ID=row.names(output$summary.fixed)) %>% remove_rownames %>% mutate(term="fixed") %>% 
+    		filter(ID  == "intercept") %>%
+    		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    	# Linear terms for CN, ORG_STOF, N_totaal, P_totaal, K_CaCl2
+    	output$summary.hyperpar %>% 
+    		mutate(ID=row.names(output$summary.hyperpar)) %>% remove_rownames %>% mutate(term="fixed") %>% 
+    		filter(ID %>% startsWith("Beta")) %>%
+    	  mutate(ID=str_replace_all(ID, c("Beta for "="", ".field"=""))) %>%
+    		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+    	# Spatial component
+    	bind_rows(list(log.variance=u_field$summary.log.variance.nominal, 
+    	               log.range=u_field$summary.log.range.nominal), .id="ID") %>% 
+    	  remove_rownames %>% mutate(term="spatial") %>% 
+    		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+      # Predictions
+    	cbind(sf.grid %>% as.data.frame %>% mutate(term="Predict", ID=Plot), 
+                       output$summary.fitted.values[index.pred,]) %>% 
+      select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+      # Predictions (log-odds scale)
+    	cbind(sf.grid %>% as.data.frame %>% mutate(term="APredict", ID=Plot), 
+                       output$summary.linear.predictor[index.pred,]) %>% 
+      select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+    ) %>% 
+      mutate(species=species.take, meta="Uncertain", model = "SDM") %>%
+      select(species, meta, model, term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+    
+    j <- 1
+    terms.abiotics <- list()
+    for (var in variables) {
+      ## transform posterior marginal of precision into variance and calculate statistics
+      i_field <- inla.spde2.result(output, name=sprintf("%s.i.field", var), spde)
+      var.marginal <- data.frame(inla.zmarginal(inla.tmarginal(function(x) log(1/x), output$marginals.hyperpar[[j]]), silent=T)) %>%
+        rename(mean=mean, sd=sd, `0.025quant`=quant0.025, `0.25quant`=quant0.25, `0.5quant`=quant0.5, `0.75quant`=quant0.75, `0.975quant`=quant0.975)
+      # predictions
+      index.pred <- inla.stack.index(stk, tag=sprintf("est.pred.%s", var))$data
+      i.pred <- output$summary.linear.predictor[index.pred,] %>% select(mean, sd, `0.025quant`, `0.5quant`,`0.975quant`)
+
+      # Abiotic factor regression terms and predictions
+      terms.abiotics[[var]] <- rbind(
+      	# Intercept
+      	output$summary.fixed %>% 
+      		mutate(ID=row.names(output$summary.fixed)) %>% remove_rownames %>% mutate(term="fixed") %>% 
+      		filter(ID  == sprintf("%s.intercept", var)) %>% mutate(ID = "intercept") %>% 
+      		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+        # Precision
+      	var.marginal %>% 
+      		mutate(ID="log.variance.eps") %>% remove_rownames %>% mutate(term="spatial") %>% 
+      		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+      	# Spatial component
+      	bind_rows(list(log.variance=i_field$summary.log.variance.nominal, 
+      	               log.range=i_field$summary.log.range.nominal), .id="ID") %>% 
+      	  remove_rownames %>% mutate(term="spatial") %>% 
+      		select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`),
+        # Predictions
+        cbind(sf.grid %>% as.data.frame %>% mutate(term="Predict", ID=Plot), i.pred) %>% 
+        select(term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+      )	
+      j <- j + 1
+    }
+    terms.abiotics <- bind_rows(terms.abiotics, .id="model") %>% 
+      mutate(species=species.take, meta="Uncertain") %>%
+      select(species, meta, model, term, ID, mean, sd, `0.025quant`, `0.5quant`, `0.975quant`)
+    
+    # Save
+    terms <- rbind(terms.sdm, terms.abiotics)
+    fn <- sprintf('results_uncertain/%s.csv', species.take)
+    write.table(terms, fn, sep = ",", col.names = T, row.names=F, append=F)
+    #write.table(terms, "results_uncertain.csv", sep = ",", col.names = !file.exists("results_uncertain.csv"), row.names=F, append=T)
+
+  }
+
+  end <- Sys.time()
+  print(end-start)
+}
+```
+
+
+## Experiments: training and validation
+It is also possible to download the results from https://zenodo.org/record/8261504
+In that case, place the downloaded files in the subfolder `data_paper/` and go to the `Results: import file` section below to import the results and create the plots. 
+
+### Provinces 
+
+Two-stage model (certain abiotics), save predictions and prevalences
+
+```{r}
+provincies <- sort(unique(sf.plots$naam))
+for (species.take in species) { 
+  print(species.take)
+  for (provincie in provincies) {#c("Utrecht")
+    print(provincie)
+    sf.train = sf.plots %>% filter(naam != provincie) 
+    sf.test = sf.plots %>% filter(naam == provincie) 
+    A_train <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.train %>% as.data.frame %>% select(X,Y)))
+    A_test <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.test %>% as.data.frame %>% select(X,Y)))
+    
+    # Fit
+    stk_y <- inla.stack(data = list(y=sf.train[[species.take]]),
+                  A = list(A_train, 1, 1, 1, 1, 1, 1, 1, 1), 
+                  effects = list(c(list(u.field=1:spde$n.spde), list(intercept=1)), 
+                                 list(terrain=sf.train$terrain), 
+                                 list(Dagnummer.z=sf.train$Dagnummer.z), 
+                                 list(pH.z=sf.train$pH.z), 
+                                 list(ORG_STOF.z=sf.train$ORG_STOF.z.mean),
+                                 list(CN.z=sf.train$CN.z.mean), 
+                                 list(N_totaal.z=sf.train$N_totaal.z.mean), 
+                                 list(P_totaal.z=sf.train$P_totaal.z.mean), 
+                                 list(K_CaCl2.z=sf.train$K_CaCl2.z.mean)
+                                 ),
+                  tag="est.y")
+    
+    stk_pred <- inla.stack(data=list(y=rep(NA, nrow(sf.test))),  
+                            effects=list(c(list(u.field=1:spde$n.spde), list(intercept=1)),
+                                         list(terrain=sf.test$terrain), 
+                                         list(Dagnummer.z=sf.test$Dagnummer.z), 
+                                         list(pH.z=sf.test$pH.z), 
+                                         list(ORG_STOF.z=sf.test$ORG_STOF.z.mean),
+                                         list(CN.z=sf.test$CN.z.mean), 
+                                         list(N_totaal.z=sf.test$N_totaal.z.mean), 
+                                         list(P_totaal.z=sf.test$P_totaal.z.mean), 
+                                         list(K_CaCl2.z=sf.test$K_CaCl2.z.mean)
+                                 ),
+                            A=list(A_test, 1, 1, 1, 1, 1, 1, 1, 1),
+                            tag="est.pred")
+    
+    stk <- inla.stack(stk_y, stk_pred)
+  
+    formula <- y ~ -1 + intercept + f(inla.group(terrain), model = "rw2") + 
+      f(inla.group(Dagnummer.z), model = "rw2") +  f(inla.group(pH.z), model = "rw2") +
+      CN.z + ORG_STOF.z + N_totaal.z + P_totaal.z + K_CaCl2.z + f(u.field, model=spde)
+      
+    index.pred <- inla.stack.index(stk, tag="est.pred")$data
+  
+    output <-  tryCatch(
+        {inla(formula, num.threads=1,
+                    data=inla.stack.data(stk, spde=spde), family="binomial",
+                    control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=1), 
+                    control.inla = list(strategy = "adaptive", int.strategy = "eb"), control.compute=list(config = TRUE)) #int.strategy = "eb"
+        }, error = function(cond) 
+            {message(cond)
+            return(NULL)}
+    )
+    
+    # First model results
+    if (!is.null(output)) {
+      # get inla posterior sample
+      s1 <- inla.posterior.sample(400, output) 
+      linear_predictor <- inla.posterior.sample.eval("APredictor", s1)[index.pred,]
+      P = 1/(1+exp(-linear_predictor))
+      sample_mean <- function(p) mean(rbinom(length(p), 1, p))
+      area_prevalences <- apply(P, 2, sample_mean) #colMeans(1/(1+exp(-linear_predictor)))
+    
+      # Predicted vs observed
+      predicted <- output$summary.fitted.values[index.pred,c("mean", "sd", "0.025quant", "0.975quant")]
+      observed <- sf.test[[species.take]]
+      
+      predictions <- cbind(predicted, observed) %>% mutate(meta = "Certain", model="SDM", species=species.take, naam = provincie)
+      prevalences <- data.frame(area_prevalences, meta = "Certain", model="SDM", species=species.take, naam = provincie)
+      #write.table(predictions, "predictions_certain.csv", sep = ",", col.names = !file.exists("predictions_certain.csv"), row.names=F, append = T)
+      #write.table(prevalences, "prevalences_certain.csv", sep = ",", col.names = !file.exists("prevalences_certain.csv"), row.names=F, append = T)
+      fn.1 <- sprintf('predictions_certain/%s_%s.csv', species.take, provincie)
+      fn.2 <- sprintf('prevalences_certain/%s_%s.csv', species.take, provincie)
+      write.table(predictions, fn.1, sep = ",", col.names = T, row.names=F, append=F)
+      write.table(prevalences, fn.2, sep = ",", col.names = T, row.names=F, append=F)
+    }
+    
+  }
+}
+```  
+
+Joint model (uncertain abiotics), save predictions and prevalences
+ 
+
+```{r}
+provincies <- sort(unique(sf.plots$naam))
+for (species.take in species) { 
+  print(species.take)
+  for (provincie in provincies) {#c("Utrecht")
+    print(provincie)
+    sf.train = sf.plots %>% filter(naam != provincie) 
+    sf.test = sf.plots %>% filter(naam == provincie) 
+    A_train <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.train %>% as.data.frame %>% select(X,Y)))
+    A_test <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.test %>% as.data.frame %>% select(X,Y)))
+    
+    # Species occurrence
+    y <- matrix(nrow=nrow(sf.train), ncol=length(variables) + 1)
+    y[,i] <- sf.train[[species.take]]
+    # Stack
+    stk_y <- inla.stack(data=list(y=y),  
+                            effects=list(c(list(ORG_STOF.z.field=1:spde$n.spde, 
+                                                CN.z.field=1:spde$n.spde,
+                                                N_totaal.z.field=1:spde$n.spde, 
+                                                P_totaal.z.field=1:spde$n.spde, 
+                                                K_CaCl2.z.field=1:spde$n.spde,
+                                                u.field=1:spde$n.spde), list(intercept=1)),
+                                         list(terrain=sf.train$terrain), 
+                                         list(Dagnummer.z=sf.train$Dagnummer.z), 
+                                         list(pH.z=sf.train$pH.z)),
+                            A=list(A_train, 1, 1, 1),
+                            tag="est.y")
+    # Predicted over grid
+    y <- matrix(nrow=nrow(sf.test), ncol=length(variables) + 1)
+    stk_pred <- inla.stack(data=list(y=y),  
+                            effects=list(c(list(ORG_STOF.z.field=1:spde$n.spde, 
+                                                CN.z.field=1:spde$n.spde,
+                                                N_totaal.z.field=1:spde$n.spde, 
+                                                P_totaal.z.field=1:spde$n.spde, 
+                                                K_CaCl2.z.field=1:spde$n.spde,
+                                                u.field=1:spde$n.spde), list(intercept=1)),
+                                         list(terrain=sf.test$terrain), 
+                                         list(Dagnummer.z=sf.test$Dagnummer.z), 
+                                         list(pH.z=sf.test$pH.z)),
+                            A=list(A_test, 1, 1, 1),
+                            tag="est.pred")
+    
+    stk <- inla.stack(stacks[["ORG_STOF.z"]], stacks[["CN.z"]], stacks[["N_totaal.z"]],
+                      stacks[["P_totaal.z"]], stacks[["K_CaCl2.z"]], stk_y, stk_pred)
+  
+    formula <- y ~ -1 + intercept + ORG_STOF.z.intercept + CN.z.intercept + N_totaal.z.intercept + P_totaal.z.intercept + K_CaCl2.z.intercept +
+      f(inla.group(terrain), model = "rw2") + f(inla.group(Dagnummer.z), model = "rw2") +  f(inla.group(pH.z), model = "rw2") + 
+      f(ORG_STOF.z.i.field, model=spde) + f(ORG_STOF.z.field, copy="ORG_STOF.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+      f(CN.z.i.field, model=spde) + f(CN.z.field, copy="CN.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+      f(N_totaal.z.i.field, model=spde) + f(N_totaal.z.field, copy="N_totaal.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001))))  +
+      f(P_totaal.z.i.field, model=spde) + f(P_totaal.z.field, copy="P_totaal.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001))))  +
+      f(K_CaCl2.z.i.field, model=spde) + f(K_CaCl2.z.field, copy="K_CaCl2.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+      f(u.field, model=spde)
+    
+    index.pred <- inla.stack.index(stk, tag="est.pred")$data
+    
+    families <- c(rep("gaussian", length(variables)), "binomial")
+    output <-  tryCatch(
+        {inla(formula, family=families, num.threads=1, #verbose=T,
+              data=inla.stack.data(stk), 
+              control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=i),
+              control.inla = list(strategy = "adaptive", int.strategy = "eb"), control.compute=list(config = TRUE)) #int.strategy = "eb"
+        }, error = function(cond) 
+            {message(cond)
+            return(NULL)}
+    )
+    
+    # Second model results
+    if (!is.null(output)) {
+      # get inla posterior sample
+      s1 <- inla.posterior.sample(400, output) 
+      linear_predictor <- inla.posterior.sample.eval("APredictor", s1)[index.pred,]
+      P = 1/(1+exp(-linear_predictor))
+      sample_mean <- function(p) mean(rbinom(length(p), 1, p))
+      area_prevalences <- apply(P, 2, sample_mean) #colMeans(1/(1+exp(-linear_predictor)))
+    
+      # Predicted vs observed
+      predicted <- output$summary.fitted.values[index.pred,c("mean", "sd", "0.025quant", "0.975quant")]
+      observed <- sf.test[[species.take]]
+      
+      predictions <- cbind(predicted, observed) %>% mutate(meta = "Uncertain", model="SDM", species=species.take, naam = provincie)
+      prevalences <- data.frame(area_prevalences, meta = "Uncertain", model="SDM", species=species.take, naam = provincie)
+      #write.table(predictions, "predictions_uncertain.csv", sep = ",", col.names = !file.exists("predictions_uncertain.csv"), row.names=F, append = T)
+      #write.table(prevalences, "prevalences_uncertain.csv", sep = ",", col.names = !file.exists("prevalences_uncertain.csv"), row.names=F, append = T)
+      fn.1 <- sprintf('predictions_uncertain/%s_%s.csv', species.take, provincie)
+      fn.2 <- sprintf('prevalences_uncertain/%s_%s.csv', species.take, provincie)
+      write.table(predictions, fn.1, sep = ",", col.names = T, row.names=F, append=F)
+      write.table(prevalences, fn.2, sep = ",", col.names = T, row.names=F, append=F)
+    }
+    
+  }
+}
+```  
+
+### FGR regions
+
+Two-stage model (certain abiotics), save predictions and prevalences
+
+
+```{r}
+fgrs <- unique(sf.plots$Fys_geo_regio)
+fgrs <- sort(fgrs[!(fgrs %in% c("gtw", "gtz"))]) # gtw (1) and gtz (5) samples
+for (species.take in species) { 
+  print(species.take)
+  for (fgr in fgrs) {
+    print(fgr)
+    sf.train = sf.plots %>% filter(Fys_geo_regio != fgr) 
+    sf.test = sf.plots %>% filter(Fys_geo_regio == fgr) 
+    A_train <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.train %>% as.data.frame %>% select(X,Y)))
+    A_test <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.test %>% as.data.frame %>% select(X,Y)))
+    
+    # Fit
+    stk_y <- inla.stack(data = list(y=sf.train[[species.take]]),
+                  A = list(A_train, 1, 1, 1, 1, 1, 1, 1, 1), 
+                  effects = list(c(list(u.field=1:spde$n.spde), list(intercept=1)), 
+                                 list(terrain=sf.train$terrain), 
+                                 list(Dagnummer.z=sf.train$Dagnummer.z), 
+                                 list(pH.z=sf.train$pH.z), 
+                                 list(ORG_STOF.z=sf.train$ORG_STOF.z.mean),
+                                 list(CN.z=sf.train$CN.z.mean), 
+                                 list(N_totaal.z=sf.train$N_totaal.z.mean), 
+                                 list(P_totaal.z=sf.train$P_totaal.z.mean), 
+                                 list(K_CaCl2.z=sf.train$K_CaCl2.z.mean)
+                                 ),
+                  tag="est.y")
+    
+    stk_pred <- inla.stack(data=list(y=rep(NA, nrow(sf.test))),  
+                            effects=list(c(list(u.field=1:spde$n.spde), list(intercept=1)),
+                                         list(terrain=sf.test$terrain), 
+                                         list(Dagnummer.z=sf.test$Dagnummer.z), 
+                                         list(pH.z=sf.test$pH.z), 
+                                         list(ORG_STOF.z=sf.test$ORG_STOF.z.mean),
+                                         list(CN.z=sf.test$CN.z.mean), 
+                                         list(N_totaal.z=sf.test$N_totaal.z.mean), 
+                                         list(P_totaal.z=sf.test$P_totaal.z.mean), 
+                                         list(K_CaCl2.z=sf.test$K_CaCl2.z.mean)
+                                 ),
+                            A=list(A_test, 1, 1, 1, 1, 1, 1, 1, 1),
+                            tag="est.pred")
+    
+    stk <- inla.stack(stk_y, stk_pred)
+  
+    formula <- y ~ -1 + intercept + f(inla.group(terrain), model = "rw2") + 
+      f(inla.group(Dagnummer.z), model = "rw2") +  f(inla.group(pH.z), model = "rw2") +
+      CN.z + ORG_STOF.z + N_totaal.z + P_totaal.z + K_CaCl2.z + f(u.field, model=spde)
+      
+    index.pred <- inla.stack.index(stk, tag="est.pred")$data
+  
+    output <-  tryCatch(
+        {inla(formula, num.threads=1,
+                    data=inla.stack.data(stk, spde=spde), family="binomial",
+                    control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=1), 
+                    control.inla = list(strategy = "adaptive", int.strategy = "eb"), control.compute=list(config = TRUE)) #int.strategy = "eb"
+        }, error = function(cond) 
+            {message(cond)
+            return(NULL)}
+    )
+    
+    # First model results
+    if (!is.null(output)) {
+      # get inla posterior sample
+      s1 <- inla.posterior.sample(400, output) 
+      linear_predictor <- inla.posterior.sample.eval("APredictor", s1)[index.pred,]
+      P = 1/(1+exp(-linear_predictor))
+      sample_mean <- function(p) mean(rbinom(length(p), 1, p))
+      area_prevalences <- apply(P, 2, sample_mean) #colMeans(1/(1+exp(-linear_predictor)))
+    
+      # Predicted vs observed
+      predicted <- output$summary.fitted.values[index.pred,c("mean", "sd", "0.025quant", "0.975quant")]
+      observed <- sf.test[[species.take]]
+      
+      predictions <- cbind(predicted, observed) %>% mutate(meta = "Certain", model="SDM", species=species.take, naam = fgr)
+      prevalences <- data.frame(area_prevalences, meta = "Certain", model="SDM", species=species.take, naam = fgr)
+      #write.table(predictions, "predictions_certain2.csv", sep = ",", col.names = !file.exists("predictions_certain2.csv"), row.names=F, append = T)
+      #write.table(prevalences, "prevalences_certain2.csv", sep = ",", col.names = !file.exists("prevalences_certain2.csv"), row.names=F, append = T)
+      fn.1 <- sprintf('predictions_certain2/%s_%s.csv', species.take, fgr)
+      fn.2 <- sprintf('prevalences_certain2/%s_%s.csv', species.take, fgr)
+      write.table(predictions, fn.1, sep = ",", col.names = T, row.names=F, append=F)
+      write.table(prevalences, fn.2, sep = ",", col.names = T, row.names=F, append=F)
+    }
+    
+  }
+}
+```  
+
+Joint model (uncertain abiotics), save predictions and prevalences
+
+
+```{r}
+fgrs <- unique(sf.plots$Fys_geo_regio)
+fgrs <- sort(fgrs[!(fgrs %in% c("gtw", "gtz"))]) # gtw (1) and gtz (5) samples
+for (species.take in species) { 
+  print(species.take)
+  for (fgr in fgrs) {
+    print(fgr)
+    sf.train = sf.plots %>% filter(Fys_geo_regio != fgr) 
+    sf.test = sf.plots %>% filter(Fys_geo_regio == fgr) 
+    A_train <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.train %>% as.data.frame %>% select(X,Y)))
+    A_test <- inla.spde.make.A(mesh=mesh, loc=as.matrix(sf.test %>% as.data.frame %>% select(X,Y)))
+    
+    # Species occurrence
+    y <- matrix(nrow=nrow(sf.train), ncol=length(variables) + 1)
+    y[,i] <- sf.train[[species.take]]
+    # Stack
+    stk_y <- inla.stack(data=list(y=y),  
+                            effects=list(c(list(ORG_STOF.z.field=1:spde$n.spde, 
+                                                CN.z.field=1:spde$n.spde,
+                                                N_totaal.z.field=1:spde$n.spde, 
+                                                P_totaal.z.field=1:spde$n.spde, 
+                                                K_CaCl2.z.field=1:spde$n.spde,
+                                                u.field=1:spde$n.spde), list(intercept=1)),
+                                         list(terrain=sf.train$terrain), 
+                                         list(Dagnummer.z=sf.train$Dagnummer.z), 
+                                         list(pH.z=sf.train$pH.z)),
+                            A=list(A_train, 1, 1, 1),
+                            tag="est.y")
+    # Predicted over grid
+    y <- matrix(nrow=nrow(sf.test), ncol=length(variables) + 1)
+    stk_pred <- inla.stack(data=list(y=y),  
+                            effects=list(c(list(ORG_STOF.z.field=1:spde$n.spde, 
+                                                CN.z.field=1:spde$n.spde,
+                                                N_totaal.z.field=1:spde$n.spde, 
+                                                P_totaal.z.field=1:spde$n.spde, 
+                                                K_CaCl2.z.field=1:spde$n.spde,
+                                                u.field=1:spde$n.spde), list(intercept=1)),
+                                         list(terrain=sf.test$terrain), 
+                                         list(Dagnummer.z=sf.test$Dagnummer.z), 
+                                         list(pH.z=sf.test$pH.z)),
+                            A=list(A_test, 1, 1, 1),
+                            tag="est.pred")
+    
+    stk <- inla.stack(stacks[["ORG_STOF.z"]], stacks[["CN.z"]], stacks[["N_totaal.z"]],
+                      stacks[["P_totaal.z"]], stacks[["K_CaCl2.z"]], stk_y, stk_pred)
+  
+    formula <- y ~ -1 + intercept + ORG_STOF.z.intercept + CN.z.intercept + N_totaal.z.intercept + P_totaal.z.intercept + K_CaCl2.z.intercept +
+      f(inla.group(terrain), model = "rw2") + f(inla.group(Dagnummer.z), model = "rw2") +  f(inla.group(pH.z), model = "rw2") + 
+      f(ORG_STOF.z.i.field, model=spde) + f(ORG_STOF.z.field, copy="ORG_STOF.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+      f(CN.z.i.field, model=spde) + f(CN.z.field, copy="CN.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+      f(N_totaal.z.i.field, model=spde) + f(N_totaal.z.field, copy="N_totaal.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001))))  +
+      f(P_totaal.z.i.field, model=spde) + f(P_totaal.z.field, copy="P_totaal.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001))))  +
+      f(K_CaCl2.z.i.field, model=spde) + f(K_CaCl2.z.field, copy="K_CaCl2.z.i.field", fixed=FALSE, hyper=list(theta=list(param=c(0, 0.001)))) +
+      f(u.field, model=spde)
+      
+    index.pred <- inla.stack.index(stk, tag="est.pred")$data
+    
+    families <- c(rep("gaussian", length(variables)), "binomial")
+    output <-  tryCatch(
+        {inla(formula, family=families, num.threads=1, #verbose=T,
+              data=inla.stack.data(stk), 
+              control.predictor=list(A=inla.stack.A(stk), compute=TRUE, link=i),
+              control.inla = list(strategy = "adaptive", int.strategy = "eb"), control.compute=list(config = TRUE)) #int.strategy = "eb"
+        }, error = function(cond) 
+            {message(cond)
+            return(NULL)}
+    )
+    
+    # Second model results
+    if (!is.null(output)) {
+      # get inla posterior sample
+      s1 <- inla.posterior.sample(400, output) 
+      linear_predictor <- inla.posterior.sample.eval("APredictor", s1)[index.pred,]
+      P = 1/(1+exp(-linear_predictor))
+      sample_mean <- function(p) mean(rbinom(length(p), 1, p))
+      area_prevalences <- apply(P, 2, sample_mean) #colMeans(1/(1+exp(-linear_predictor)))
+    
+      # Predicted vs observed
+      predicted <- output$summary.fitted.values[index.pred,c("mean", "sd", "0.025quant", "0.975quant")]
+      observed <- sf.test[[species.take]]
+      
+      predictions <- cbind(predicted, observed) %>% mutate(meta = "Uncertain", model="SDM", species=species.take, naam = fgr)
+      prevalences <- data.frame(area_prevalences, meta = "Uncertain", model="SDM", species=species.take, naam = fgr)
+      #write.table(predictions, "predictions_uncertain2.csv", sep = ",", col.names = !file.exists("predictions_uncertain2.csv"), row.names=F, append = T)
+      #write.table(prevalences, "prevalences_uncertain2.csv", sep = ",", col.names = !file.exists("prevalences_uncertain2.csv"), row.names=F, append = T)
+      fn.1 <- sprintf('predictions_uncertain2/%s_%s.csv', species.take, fgr)
+      fn.2 <- sprintf('prevalences_uncertain2/%s_%s.csv', species.take, fgr)
+      write.table(predictions, fn.1, sep = ",", col.names = T, row.names=F, append=F)
+      write.table(prevalences, fn.2, sep = ",", col.names = T, row.names=F, append=F)
+    }
+    
+  }
+}
+```  
+
+## Combine and export data 
+
+Combine and export the results of fitting all models to data: 
+It is also possible to skip this cell and download the results from https://zenodo.org/record/8261504
+Place the data in the subfolder `data_paper/` and run the code below this cell to create the plots. 
+
+```{r}
+# Model parameters and predictions in entire data set
+c(list.files("results_certain", full.names=T),
+  list.files("results_uncertain", full.names=T)) %>% 
+  map_dfr(read_csv, show_col_types=F) %>% 
+  mutate(species=replace_na(species, ""))  %>% 
+  write.csv(file="data_paper/results.csv", row.names=F)
+# Predicted occurrence and prevalence in validation data set (Provinces)
+c(list.files("predictions_certain", full.names=T), 
+  list.files("predictions_uncertain", full.names=T)) %>% 
+  map_dfr(read_csv, show_col_types=F) %>% 
+  mutate(species=replace_na(species, ""))  %>% 
+  write.csv(file="data_paper/predictions_province.csv", row.names=F)
+c(list.files("prevalences_certain", full.names=T), 
+  list.files("prevalences_uncertain", full.names=T)) %>% 
+  map_dfr(read_csv, show_col_types=F) %>% 
+  mutate(species=replace_na(species, ""))  %>% 
+  write.csv(file="data_paper/prevalences_province.csv", row.names=F)
+# Predicted occurrence and prevalence in validation data set (FGR regions)
+c(list.files("predictions_certain2", full.names=T), 
+  list.files("predictions_uncertain2", full.names=T)) %>% 
+  map_dfr(read_csv, show_col_types=F) %>% 
+  mutate(species=replace_na(species, ""))  %>% 
+  write.csv(file="data_paper/predictions_fgr.csv", row.names=F)
+c(list.files("prevalences_certain2", full.names=T), 
+  list.files("prevalences_uncertain2", full.names=T)) %>% 
+  map_dfr(read_csv, show_col_types=F) %>% 
+  mutate(species=replace_na(species, ""))  %>% 
+  write.csv(file="data_paper/prevalences_fgr.csv", row.names=F)
+```
+
+## Results: import file  
+
+```{r}
+results <- read.csv("data_paper/results.csv")
+#results <- read.csv("data_paper/results.csv", col.names=c("species", "meta", "model", "term", "ID", "mean", "sd", "X0.025quant", "X0.5quant", "X0.975quant")) # LSF cluster results
+```
+
+## Results: crowberry example
+
+```{r}
+species.take <- "Kraaihei" #Gewoon reukgras, Engels raaigras, Pitrus, Duizendbland, Jacobskruiskruid
+terms <- results %>% filter((species == species.take) | (species == "")) #is.na(species)
+```
+
+Spline parameters (SDM)
+
+```{r}
+# Day number, pH, terrain
+terms.plot <- terms %>% filter(term %in% c("pH.z", "Dagnummer.z", "terrain")) %>% mutate(ID=ID %>% as.numeric) %>%
+  mutate(term=recode(term, "pH.z" = "pH (z-score)", "Dagnummer.z"="Day number (months)", "terrain"="Terrain (more - less natural)")) %>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "Joint")))
+plot.splines <- ggplot(terms.plot, aes(x=ID, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) + geom_line() +
+  geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + 
+  scale_color_discrete(name = "Model") +
+  scale_x_continuous(breaks=seq(-4,4), name='Covariate Value') + 
+  scale_y_continuous(name='Value') +
+  facet_wrap( ~ term, ncol = 10, scales="free")
+plot.splines
+```
+
+Abiotic parameters (SDM)
+
+```{r}
+# Linear terms
+terms.plot <- terms %>% filter((term == "fixed") & (ID != "intercept")) %>% 
+  mutate(ID=fct_relevel(ID, "ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z")) %>% #"intercept", 
+  mutate(term=recode(term, "fixed" = "Abiotic (z-score)")) %>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "Joint")))
+plot.abiotic <- ggplot(terms.plot, aes(x=ID, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) +
+  geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + 
+  scale_color_discrete(name = "Model Abiotics") +
+  scale_x_discrete(name='Covariate') + 
+  scale_y_continuous(name='Value') + #coord_cartesian(ylim=c(-5,5))+ #ylim=c(-10,10)
+  facet_wrap( ~ term, ncol = 10, scales="free")
+plot.abiotic
+```
+
+Spatial component parameters (SDM) 
+
+```{r}
+# Spatial terms
+terms.plot <- terms %>% filter((model == "SDM") & (term == "spatial")) %>% 
+  mutate(ID=fct_relevel(ID, "log.range", "log.variance")) %>%
+  mutate(term=recode(term, "spatial" = "Spatial (km)")) %>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "Joint")))
+plot.spatial <- ggplot(terms.plot, aes(x=ID, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) +
+  geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + 
+  scale_color_discrete(name = "Model Abiotics") +
+  scale_x_discrete(name='Covariate') + 
+  scale_y_continuous(name='Value') + #+coord_cartesian(ylim=c(-5,5))+ #ylim=c(-10,10)
+  facet_wrap( ~ term, ncol = 10, scales="free")
+plot.spatial
+```
+
+Spatial component parameters (abiotics) 
+
+```{r}
+# Spatial terms (abiotics)
+terms.plot <- terms %>% filter((term =="spatial") & (model != "SDM")) %>%
+  mutate(ID=fct_relevel(ID, "log.range", "log.variance", "log.variance.eps")) %>%
+  mutate(term=recode(term, "spatial" = "Spatial (km)"))%>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "Joint")))
+plot.extrapolate <- ggplot(terms.plot, aes(x=ID, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) +
+  geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + 
+  scale_color_discrete(name = "Model Abiotics") +
+  scale_x_discrete(name='Covariate') + 
+  scale_y_continuous(name='Value') +
+  facet_wrap( ~ model, ncol = 10, scales="free")
+plot.extrapolate
+```
+
+Combine all parameters to a single plot
+
+```{r}
+plot.all <- ggdraw() +
+  draw_plot(plot.splines, x = 0, y = .666, width = 1, height = .333) +
+  draw_plot(plot.abiotic + theme(legend.position = "none"), x = 0, y = .333, width = .77, height = .333) +
+  draw_plot(plot.spatial + theme(legend.position = "none"), x = 0.77, y = .333, width = 0.23, height = 0.333) +
+  draw_plot(plot.extrapolate + theme(legend.position = "none"), x = 0, y = 0, width = 1, height = 0.333) +
+  draw_plot_label(label = c("A", "B", "C", "D"), size = 15, x = c(0.03, 0.03, 0.79, 0.03), y = c(0.96, 0.70, 0.70, 0.37))
+plot.all
+ggsave('results_paper/species_parameters.png', width=2000, heigh=2500, units='px')
+```
+
+Map of observed vs. predicted SDM from both models, probability scale
+
+```{r}
+# Predictions
+terms.plot <- terms %>% filter((model == "SDM") & (term == "Predict")) %>% mutate(Plot=ID %>% as.factor)
+
+# Combine data observations with model predictions
+sf.base <- sf.grid %>% select(Plot, geometry.1) %>% st_set_geometry("geometry.1")
+terms.y <- sf.base %>% st_join(sf.plots %>% select(all_of(species.take)), st_contains) %>% 
+  group_by(Plot) %>% summarize(y=mean(get(species.take), na.rm=T)) %>% as.data.frame %>% select(Plot, y)
+terms.sf <- sf.base %>% merge(terms.plot) %>% merge(terms.y)
+
+plot0 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=y), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_viridis_c(option="B", limits=c(0,1)) + ggtitle("Raw data") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot1 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=mean), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_viridis_c(option="B", limits=c(0,1)) + ggtitle("Joint Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot2 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=mean), data=terms.sf %>% filter(meta=="Certain")) + 
+  scale_fill_viridis_c(option="B", limits=c(0,1)) + ggtitle("Two-Stage Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot4 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=sd), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_gradient(low='darkblue', high='yellow', limits=c(0,max(terms.sf$sd))) + ggtitle("Joint Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot5 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=sd), data=terms.sf %>% filter(meta=="Certain")) + 
+  scale_fill_gradient(low='darkblue', high='yellow', limits=c(0,max(terms.sf$sd))) + ggtitle("Two-Stage Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+#plot.all <- plot_grid(plot0, plot1, plot2, NULL, plot4, plot5, nrow = 2) + theme(plot.background = element_rect(fill = "white", colour = NA))
+plot.all <- ggdraw() +
+  draw_plot(plot0, x = 0, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot1, x = 0.33, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot2, x = 0.66, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot4, x = 0.33, y = 0, width = 0.33, height = .5) +
+  draw_plot(plot5, x = 0.66, y = 0, width = 0.33, height = .5) +
+  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 15, x = c(0.00, 0.33, 0.66, 0.33, 0.66), y = c(1.00, 1.00, 1.00, 0.50, 0.50))
+plot.all
+ggsave('results_paper/species_SDM_y.png', width=3200, heigh=3000, units='px')
+```
+
+Map of observed vs. predicted SDM from both models, log-odds scale
+
+```{r}
+# Predictions (log-odds)
+terms.plot <- terms %>% filter((model == "SDM") & (term == "APredict")) %>% mutate(Plot=ID %>% as.factor)
+y.mean <- mean(sf.plots[[species.take]], na.rm=T)
+y.mean <- log(y.mean/(1-y.mean))
+
+# Combine data observations with model predictions
+sf.base <- sf.grid %>% select(Plot, geometry.1) %>% st_set_geometry("geometry.1")
+terms.y <- sf.base %>% st_join(sf.plots %>% select(all_of(species.take)), st_contains) %>% 
+  group_by(Plot) %>% summarize(y=mean(get(species.take), na.rm=T)) %>% as.data.frame %>% select(Plot, y)
+terms.sf <- sf.base %>% merge(terms.plot) %>% merge(terms.y)
+
+plot0 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=y), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_viridis_c(option="B", limits=c(0,1)) + ggtitle("Raw data") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot1 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=mean), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_continuous_divergingx(palette = 'PiYG', mid = y.mean) + ggtitle("Joint Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot2 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=mean), data=terms.sf %>% filter(meta=="Certain")) + 
+  scale_fill_continuous_divergingx(palette = 'PiYG', mid = y.mean) + ggtitle("Two-Stage Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot4 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=sd), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_gradient(low='darkblue', high='orange', limits=c(0,max(terms.sf$sd))) + ggtitle("Joint Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot5 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=sd), data=terms.sf %>% filter(meta=="Certain")) + 
+  scale_fill_gradient(low='darkblue', high='orange', limits=c(0,max(terms.sf$sd))) + ggtitle("Two-Stage Model") + 
+  theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+#plot.all <- plot_grid(plot0, plot1, plot2, NULL, plot4, plot5, nrow = 2) + theme(plot.background = element_rect(fill = "white", colour = NA))
+plot.all <- ggdraw() +
+  draw_plot(plot0, x = 0, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot1, x = 0.33, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot2, x = 0.66, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot4, x = 0.33, y = 0, width = 0.33, height = .5) +
+  draw_plot(plot5, x = 0.66, y = 0, width = 0.33, height = .5) +
+  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 15, x = c(0.00, 0.33, 0.66, 0.33, 0.66), y = c(1.00, 1.00, 1.00, 0.50, 0.50))
+plot.all
+ggsave('results_paper/species_SDM_logodds.png', width=3200, heigh=3000, units='px')
+
+```
+
+Map of observed vs. predicted abiotics from both models
+
+```{r}
+for (var in c("ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z")) {#var <- "ORG_STOF.z"
+# Predictions
+terms.plot <- terms %>% filter((model == var) & (term == "Predict")) %>% mutate(Plot=ID %>% as.factor)
+
+# Combine data observations with model predictions
+sf.base <- sf.grid %>% select(Plot, geometry.1) %>% st_set_geometry("geometry.1")
+terms.y <- sf.base %>% st_join(sf.plots[var], st_contains) %>% 
+  group_by(Plot) %>% summarize(y=mean(get(var), na.rm=T)) %>% as.data.frame %>% select(Plot, y)
+terms.sf <- sf.base %>% merge(terms.plot) %>% merge(terms.y)
+
+plot0 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=y), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_gradient2(low='blue', midpoint=0, high='red', limits=c(-3,3)) + 
+  ggtitle(sprintf('Raw data %s', var)) + theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot1 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=mean), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_gradient2(low='blue', midpoint=0, high='red', limits=c(-3,3)) + 
+  ggtitle(sprintf('Joint Model %s', var)) + theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot2 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=mean), data=terms.sf %>% filter(meta=="Certain")) + 
+  scale_fill_gradient2(low='blue', midpoint=0, high='red', limits=c(-3,3)) + 
+  ggtitle(sprintf('Two-Stage Model %s', var)) + theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot4 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=sd), data=terms.sf %>% filter(meta=="Uncertain")) + 
+  scale_fill_gradient(low='white', high='red', limits=c(0,max(terms.sf$sd))) + 
+  ggtitle(sprintf('Joint Model %s', var)) + theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+plot5 <- ggplot(NL) + geom_sf() + geom_sf(aes(fill=sd), data=terms.sf %>% filter(meta=="Certain")) + 
+  scale_fill_gradient(low='white', high='red', limits=c(0,max(terms.sf$sd))) + 
+  ggtitle(sprintf('Two-Stage Model %s', var)) + theme(legend.position="bottom", legend.key.width = unit(0.06, "npc"))
+#plot.all <- plot_grid(plot0, plot1, plot2, NULL, plot4, plot5, nrow = 2) + theme(plot.background = element_rect(fill = "white", colour = NA))
+plot.all <- ggdraw() +
+  draw_plot(plot0, x = 0, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot1, x = 0.33, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot2, x = 0.66, y = .5, width = 0.33, height = .5) +
+  draw_plot(plot4, x = 0.33, y = 0, width = 0.33, height = .5) +
+  draw_plot(plot5, x = 0.66, y = 0, width = 0.33, height = .5) +
+  draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 15, x = c(0.00, 0.33, 0.66, 0.33, 0.66), y = c(1.00, 1.00, 1.00, 0.50, 0.50))
+ggsave(sprintf('results_paper/species_%s.png', var), width=3200, heigh=3000, units='px')
+}
+```
+
+Scatter plot of predicted values in each grid cell: two-stage vs joint model
+
+```{r}
+terms.plot.1 <- terms %>% filter((model == "SDM") & (term == "APredict")) %>% mutate(Plot=ID %>% as.factor) %>% 
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage Model", "Uncertain"="Joint Model"), levels=c("Two-Stage Model", "Joint Model"))) %>%
+  select(species,meta,model,term,ID,mean,sd) %>% pivot_longer(c(mean,sd), names_to="type", values_to="estimate") %>% 
+  pivot_wider(names_from = meta, values_from = estimate)
+
+terms.plot.2 <- terms %>% filter((model != "SDM") & (term == "Predict")) %>% 
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage Model", "Uncertain"="Joint Model"), levels=c("Two-Stage Model", "Joint Model"))) %>%
+  select(meta,model,term,ID,mean,sd) %>% pivot_longer(c(mean,sd), names_to="type", values_to="estimate") %>% 
+  pivot_wider(names_from = meta, values_from = estimate) %>% mutate(species=species.take)
+
+terms.plot <- rbind(terms.plot.1, terms.plot.2) %>% 
+  mutate(model=fct_relevel(model, "SDM", "ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z"))
+
+plot.scatter <- ggplot() + geom_point(aes(x=`Two-Stage Model`, y=`Joint Model`), data=terms.plot, size=0.1, alpha=0.2) + geom_abline() + 
+     facet_wrap( ~ type + model, ncol = 3, scales="free") #+ ggtitle('Predicted Log-Odds (SDM) and \nPredicted Mean (Abiotics) at Grid Cells')
+plot.scatter
+ggsave('results_paper/species_scatter.png', width=1800, heigh=2400, units='px')
+```
+
+
+## Results: all species
+
+Abiotic parameters for all species two-stage vs. joint model
+
+```{r}
+# Linear terms for all species
+terms.plot <- results %>% filter((term == "fixed") & (model == "SDM")  & (ID != "intercept")) %>% 
+  mutate(ID=fct_relevel(ID, "ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z")) %>% #"intercept",  
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "Joint"))) %>%
+  merge(species.map) %>% mutate(species = name)
+plot.abiotics.all <- ggplot(terms.plot, aes(x=ID, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) +
+  geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + 
+  scale_color_discrete(name = "Model") +
+  scale_x_discrete(name='Covariate') + 
+  scale_y_continuous(name='Value') +coord_cartesian(ylim=c(-5,5))+ #ylim=c(-10,10)
+  facet_wrap( ~ species, ncol = 5)#, scales="free"
+plot.abiotics.all
+ggsave('results_paper/all_abiotics.png', width=2400, heigh=4000, units='px')
+```
+
+Table of correlations between predictions in each grid cell of two-stage vs. joint model
+
+```{r}
+# Uncertain vs Certain abiotic predictions
+certain.abiotics <- results %>% filter(species == "") %>% transmute(model,ID,Certain=mean)
+uncertain.abiotics <- results %>% filter((meta == "Uncertain") & (model != "SDM") & (term == "Predict")) %>% transmute(species, model,ID,Uncertain=mean)
+abiotics <- uncertain.abiotics %>% merge(certain.abiotics)
+# Uncertain vs Certain SDM predictions
+certain.sdm <- results %>% filter((meta == "Certain") & (model == "SDM") & (term == "APredict")) %>% transmute(species, model,ID,Certain=mean)
+uncertain.sdm <- results %>% filter((meta == "Uncertain") & (model == "SDM") & (term == "APredict")) %>% transmute(species, model,ID,Uncertain=mean)
+sdm <- certain.sdm %>% merge(uncertain.sdm)
+# Table of correlations
+compare <- rbind(abiotics, sdm)
+compare.cor <- compare %>% group_by(species, model) %>% 
+  summarize(cor = sprintf("%.2f", round(cor(Certain, Uncertain),2))) %>% 
+  pivot_wider(names_from=model, values_from=cor) %>%
+  merge(species.map) %>% mutate(species = name) %>% select(-name) %>% arrange(species)
+compare.cor %>% write.table('results_paper/correlation.csv', sep=',', row.names=F)
+```
+
+Histogram of these correlations
+
+```{r}
+compare.cor <- compare %>% group_by(species, model) %>% 
+  summarize(cor = cor(Certain, Uncertain)) %>%
+  mutate(model=fct_relevel(model, "SDM", "ORG_STOF.z", "CN.z", "N_totaal.z", "P_totaal.z", "K_CaCl2.z"))
+
+ggplot(compare.cor, aes(x=cor)) + 
+  geom_histogram(color="black", fill="white", breaks=seq(0.8,1.0,0.01)) + 
+  ylab("Number of Species") +xlab("Pearson Correlation Coefficient") +
+  facet_wrap( ~ model, ncol = 3)  #+ggtitle('Correlation between Certain vs. Uncertain Abiotic Model Predictions')
+ggsave('results_paper/species_correlation.png', width=2000, heigh=1200, units='px')
+
+```
+
+Table of correlations between abiotic parameters in each species of two-stage vs. joint model
+
+```{r}
+# Uncertain vs Certain abiotic predictions
+certain.abiotics <- results %>% filter((meta == "Certain") & (model == "SDM") & (term == "fixed") & (ID != "intercept")) %>%
+  transmute(species, model,ID,Certain=mean)
+uncertain.abiotics <- results %>% filter((meta == "Uncertain") & (model == "SDM") & (term == "fixed") & (ID != "intercept")) %>%
+  transmute(species, model,ID,Uncertain=mean)
+abiotics <- uncertain.abiotics %>% merge(certain.abiotics)
+# Table of correlations
+compare.cor <- abiotics %>% group_by(ID) %>% summarize(cor = round(cor(Certain, Uncertain),2)) %>% 
+  pivot_wider(names_from=ID, values_from=cor)
+compare.cor
+```
+
+Validation set illustration
+
+```{r}
+# Leave province out
+sf.grid$provincie <- as.factor(sf.grid$naam)
+plot.validation.1 <- ggplot(sf.grid) +
+	geom_sf(aes(geometry=geometry.1, fill=provincie)) + 
+	geom_sf(fill=NA, data=NL) +
+  scale_fill_discrete(name = "Province") +
+	ggtitle('Leave-province-out')
+
+# Leave FGR region out
+sf.grid$fgr <- factor(sf.grid$lmf_indeling, levels=c("afz", "duo", "duw", "hll", "hzn", "hzo", "hzv",
+                                                     "hzz", "lvh", "lvn", "riv", "zkm", "zkn", "zkz"))
+plot.validation.2 <- ggplot(sf.grid) +
+	geom_sf(aes(geometry=geometry.1, fill=fgr)) + 
+	geom_sf(fill=NA, data=NL) +
+  scale_fill_manual(name = "FGR", values=c("afz"="lightseagreen", "duo"="darkgoldenrod", "duw"="darkgoldenrod1", "hll"="forestgreen", 
+                                           "hzn"="wheat1", "hzo"="wheat2", "hzv"="wheat3", "hzz"="wheat4", 
+                                           "lvh"="darkseagreen", "lvn"="darkseagreen1", "riv"="steelblue", 
+                                           "zkm"="snow2", "zkn"="snow3", "zkz"="snow4")) +
+	ggtitle('Leave-FGR-out')
+
+# Combine plots
+plot.all <- ggdraw() +
+  draw_plot(plot.validation.1, x = 0, y = 0, width = 0.53, height = 1) +
+  draw_plot(plot.validation.2, x = 0.53, y = 0, width = 0.47, height = 1) +
+  draw_plot_label(label = c("A", "B"), size = 15, x = c(0.01, 0.53), y = c(0.99,0.99)) +
+  theme(plot.background = element_rect(fill = "white", colour = NA))
+plot.all
+ggsave('results_paper/leave_out_validation.png', width=2500, heigh=1300, units='px')
+
+```
+
+## Results: training and validation
+
+Calculate overall RMSE in each province
+
+```{r}
+predictions <- read.csv("data_paper/predictions_province.csv")
+#predictions <- read.csv("data_paper/predictions_province.csv", col.names=c("mean", "sd", "X0.025quant", "X0.975quant", "observed", "meta", "model", "species", "naam")) # LSF cluster results
+rmse.1 <- predictions %>% group_by(meta, species) %>% summarize(rmse=sqrt(mean((observed-mean)**2, na.rm=T))) 
+```
+
+Calculate overall RMSE in each FGR region
+
+```{r}
+predictions <- read.csv("data_paper/predictions_fgr.csv")
+#predictions <- read.csv("data_paper/predictions_fgr.csv", col.names=c("mean", "sd", "X0.025quant", "X0.975quant", "observed", "meta", "model", "species", "naam")) # LSF cluster results
+rmse.2 <- predictions %>% group_by(meta, species) %>% summarize(rmse=sqrt(mean((observed-mean)**2, na.rm=T))) 
+```
+
+Scatter plot of two-stage vs. joint model overall RMSE in each species:
+
+```{r}
+rmse.both <- rbind(rmse.1 %>% mutate(validation="Province"),
+                   rmse.2 %>% mutate(validation="FGR")) %>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage Model", "Uncertain"="Joint Model"), levels=c("Two-Stage Model", "Joint Model")))
+rmse.both %>% pivot_wider(names_from = c(validation, meta), values_from = rmse) %>% 
+  mutate(across(2:5, function(x) sprintf("%.3f", round(x,3)))) %>% 
+  merge(species.map) %>% mutate(species = name) %>% select(-name) %>% arrange(species)%>%
+  write.table('results_paper/rmse_compare.csv', sep=',', row.names=F)
+
+ggplot(rmse.both  %>% pivot_wider(names_from = meta, values_from = rmse)) + 
+  geom_point(aes(x=`Two-Stage Model`, y=`Joint Model`), size=0.5) + geom_abline() +
+  scale_x_continuous(trans='log10', labels = label_comma()) + scale_y_continuous(trans='log10', labels = label_comma()) +
+   coord_cartesian(ylim=c(0.03,0.5), xlim=c(0.03,0.5)) + facet_wrap( ~ validation, ncol = 2) #+
+  #ggtitle('Species validation RMSE: Certain vs. Uncertain Abiotics')
+ggsave('results_paper/rmse_comparison.png', width=1200, heigh=800, units='px')
+
+```
+
+Compare predicted and observed prevalence in each province:
+
+```{r}
+prevalences <- read.csv("data_paper/prevalences_province.csv")
+# prevalences <- read.csv("data_paper/prevalences_province.csv", col.names=c("area_prevalences", "meta", "model", "species", "naam")) # LSF cluster results
+
+prevalences.predicted <- prevalences %>% group_by(meta, species, naam) %>% 
+  summarize(mean = mean(area_prevalences, na.rm=T), 
+            X0.025quant = quantile(area_prevalences, 0.025, na.rm=T),
+            X0.975quant = quantile(area_prevalences, 0.975, na.rm=T))
+
+prevalences.observed <- sf.plots %>% as.data.frame  %>% select(naam, all_of(species)) %>% 
+  #mutate(naam=Fys_geo_regio) %>% filter(!(naam %in% c("gtw", "gtz"))) %>% 
+  group_by(naam) %>% summarize_all(function(x) mean(x, na.rm=T)) %>% 
+  pivot_longer(species, names_to = "species", values_to="mean") %>% mutate(meta="True")
+
+prevalences.both <- rbind(prevalences.predicted, prevalences.observed) %>%
+  filter((species != "Struikhei") & (!is.na(naam))) %>%
+  mutate(naam=recode(naam, "Drenthe"='DR', "Flevoland"='FL', "Fryslân"='FR', "Gelderland"='GE', "Groningen"='GR',
+                     "Limburg"='LI', "Noord-Brabant"='NB', "Noord-Holland"='NH', "Overijssel"='OV', "Utrecht"='UT',
+                     "Zeeland"='ZE', "Zuid-Holland"='ZH')) %>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "True", "Joint"))) %>%
+  merge(species.map) %>% mutate(species = name)
+
+plot.all <- ggplot(prevalences.both, aes(x=naam, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) + 
+  geom_errorbar(position=position_dodge(width=0.5), width=0.5, aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + #+ position_dodge()
+  scale_color_discrete(name = "Model") +
+  scale_x_discrete(name='Province') + 
+  scale_y_continuous(name='Prevalence') +
+  facet_wrap( ~ species, ncol = 5, scales='free_y')
+plot.all
+ggsave('results_paper/all_prevalences.png', width=2800, heigh=4000, units='px')
+```
+
+
+Compare predicted and observed prevalence in each FGR region:
+
+```{r}
+prevalences <- read.csv("data_paper/prevalences_fgr.csv")
+# prevalences <- read.csv("data_paper/prevalences_fgr.csv", col.names=c("area_prevalences", "meta", "model", "species", "naam")) # LSF cluster results
+
+prevalences.predicted <- prevalences %>% group_by(meta, species, naam) %>% 
+  summarize(mean = mean(area_prevalences, na.rm=T), 
+            X0.025quant = quantile(area_prevalences, 0.025, na.rm=T),
+            X0.975quant = quantile(area_prevalences, 0.975, na.rm=T))
+
+prevalences.observed <- sf.plots %>% as.data.frame  %>% select(Fys_geo_regio, all_of(species)) %>% 
+  mutate(naam=Fys_geo_regio) %>% filter(!(naam %in% c("gtw", "gtz"))) %>% 
+  group_by(naam) %>% summarize_all(function(x) mean(x, na.rm=T)) %>% 
+  pivot_longer(species, names_to = "species", values_to="mean") %>% mutate(meta="True")
+
+prevalences.both <- rbind(prevalences.predicted, prevalences.observed) %>%
+  filter((species != "Struikhei") & (!is.na(naam))) %>%
+  mutate(meta=factor(recode(meta, "Certain" = "Two-Stage", "Uncertain"="Joint"), levels=c("Two-Stage", "True", "Joint")))  %>%
+  merge(species.map) %>% mutate(species = name) #%>%
+  #mutate(naam=recode(naam, "Drenthe"='DR', "Flevoland"='FL', "Fryslân"='FR', "Gelderland"='GE', "Groningen"='GR',
+  #                   "Limburg"='LI', "Noord-Brabant"='NB', "Noord-Holland"='NH', "Overijssel"='OV', "Utrecht"='UT',
+  #                   "Zeeland"='ZE', "Zuid-Holland"='ZH'))
+
+plot.all <- ggplot(prevalences.both, aes(x=naam, y=mean, col=meta, group=meta)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) + 
+  geom_errorbar(position=position_dodge(width=0.5), width=0.5, aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + #+ position_dodge()
+  scale_color_discrete(name = "Model") +
+  scale_x_discrete(name='Fys_geo_regio') + 
+  scale_y_continuous(name='Prevalence') +
+  facet_wrap( ~ species, ncol = 5, scales='free_y')
+plot.all
+ggsave('results_paper/all_prevalences2.png', width=2800, heigh=4000, units='px')
+```
+
+
+
+
+
