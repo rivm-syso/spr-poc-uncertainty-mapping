@@ -1,6 +1,6 @@
 ---
 title: "paper_data"
-author: "Markus Viljanen"
+author: "Makrus Viljanen"
 date: "2023-08-09"
 output: html_document
 ---
@@ -23,7 +23,7 @@ library(sf)
 Fetch Netherlands boundaries from RIVM GIS server. Here as well as in the modelling code, all coordinates are in EPSG:28992 Projected coordinate system for Netherlands. 
 
 ```{r}
-conn <- dbConnect(PostgreSQL(), dbname="geodata", user = "", password="", host = "geodatabase.rivm.nl")
+conn <- dbConnect(PostgreSQL(), dbname="geodata", user = "ro", password="ro!geo", host = "geodatabase.rivm.nl")
 NL <- st_read(conn, query = "SELECT * FROM nl.adm_wijkbuurt_2022_gen;") %>%
   filter(indeling == 'gemeente') %>% st_union()
 st_write(NL, "data_paper/NL.shp", append=F)
@@ -171,7 +171,7 @@ grid.rect <- st_make_grid(NL,n=100,crs=st_crs(NL), what='polygons', square=T)
 grid.circle <- st_make_grid(NL,n=100,crs=st_crs(NL), what='centers')
 index <- which(lengths(st_within(grid.circle, NL)) > 0) #st_intersects(grid.rect, NL)
 # Create data frame
-sf.grid <- data.frame(grid.circle[index], grid.rect[index]) %>% st_as_sf(crs=st_crs(NL))
+sf.grid <- data.frame( grid.rect[index]) %>% st_as_sf(crs=st_crs(NL))
 sf.grid[c("X", "Y")] <- sf.grid %>% st_geometry %>% st_centroid() %>% st_coordinates()
 sf.grid$Plot <- factor(sprintf("Grid%d", 1:nrow(sf.grid)))
 ```
@@ -186,7 +186,7 @@ st_geometry(provincie) <- (provincie$geom - matrix(data=c(155000, 463000), ncol=
 
 sf.plots <- sf.plots %>% st_join(provincie , left=T, st_within)
 sf.grid <- sf.grid %>% st_join(provincie , left=T, st_within)
-#plot(provincie)
+# plot(provincie)
 ```
 
 Add GIS layers: FGR regio
