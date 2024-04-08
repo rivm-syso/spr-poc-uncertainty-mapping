@@ -99,7 +99,7 @@ ggplot(NL) + geom_sf() +
   guides(colour=guide_legend("Not mappable", override.aes=list(colour="gray"))) +
   scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
   scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
-	theme(legend.position="right") #+ggtitle('Grid of Netherlands: Landuse') 
+	theme(legend.position="right") +ggtitle('Physical Geographical Regions') 
 ggsave('results_paper/fgr.png', width=1600, heigh=1500, units='px')
 ```
 
@@ -131,7 +131,7 @@ ggplot() +
   scale_fill_manual(values=colors, na.value='gray',name='Province') +
   scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
   scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
-	theme(legend.position="right") #+ggtitle('Grid of Netherlands: Landuse') 
+	theme(legend.position="right") +ggtitle('Provinces of the Netherlands')  
 ggsave('results_paper/provinces.png', width=1600, heigh=1200, units='px')
 
 ```
@@ -195,13 +195,15 @@ sf.plots$has_abiotics <- !is.na(sf.plots$releve_nr)
 ```
 
 ```{r}
+sf.plots.rev <- sf.plots %>% arrange(has_abiotics)
 ggplot(NL) + geom_sf() +
 	geom_sf(aes(geometry=geometry.1), data=sf.grid) + 
 	#geom_sf(aes(geometry=geometry), shape=3, size=0.3, data=sf.grid) + 
-	geom_sf(aes(geometry=geometry, color=has_abiotics), shape=4, size=0.5, data=sf.plots) + 
+	geom_sf(aes(geometry=geometry, color=has_abiotics), shape=4, size=0.5, data=sf.plots.rev) + 
 	theme(plot.title = element_text(hjust = 0.5), legend.title=element_text(size=10), 
 		legend.text=element_text(size=8), legend.position="right") +
-	scale_colour_manual(values=c("#377EB8", "#4DAF4A"), name="Has abiotics") #+ 
+	scale_colour_manual(values=c("#377EB8", "#4DAF4A"), name="Abiotic measurements") +
+  scale_fill_discrete(guide=guide_legend(reverse=T))
 	#ggtitle('Location of Field Visits and Abiotics') 
 ggsave('results_paper/visits.png', width=1400, heigh=1200, units='px')
 
@@ -1642,34 +1644,27 @@ compare.cor
 Validation set illustration
 
 ```{r}
-colors = c("#1f77b4","#64a9d9","#bfe4ff",
-          "#ff7f0e","#ffae66","#ffddbf",
-          "#2ca02c","#6acf6a","#bfffbf",
-          "#d62627","#ea6d6e","#ffbfbf",
+colors = c("#1f77b4","#64a9d9",
+          "#ff7f0e","#ff9e49","#ffbd84","#ffddbf",
+          "#2ca02c",
+          "#d62627","#ea6d6e",
+          "#8c564b",
           "#9466bd","#b88fde","#e0bfff")
-names(colors) = c('Closed estuaries',
- 'Dunes mainland',
- 'Dunes Wadden islands',
- 'Higher sandy soils East',
- 'Higher sandy soils North',
- 'Higher sandy soils South',
- 'Higher sandy soils Veluwe',
+names(colors) = c(
+ 'Dunes mainland', 'Dunes Wadden islands',
+ 'Higher sandy soils East', 'Higher sandy soils North', 'Higher sandy soils South', 'Higher sandy soils Veluwe',
  'Hill country Limburg ',
- 'Low peat Holland',
- 'Low peat North',
+ 'Low peat Holland', 'Low peat North',
  'River area ',
- 'Sea clay middle',
- 'Sea clay North',
- 'Sea clay South ',
- 'Tidal areas Zeeland')
+ 'Sea clay middle', 'Sea clay North', 'Sea clay South ')
 plot.validation.2 <- ggplot(NL) + geom_sf() +
-	geom_sf(aes(geometry=geometry.1, fill=lmf_english,linewidth=0.1,colour=""), data=sf.grid) +
+	geom_sf(aes(geometry=geometry.1, fill=lmf_english,linewidth=0.1,colour=""), data=filter(sf.grid, lmf_english!='Tidal areas Zeeland', lmf_english!='Closed estuaries')) +
   scale_linewidth_identity() +
   scale_fill_manual(values=colors, na.value='gray',name='Physical Geological Region') +
   scale_colour_manual(values=NA) +
   guides(colour=guide_legend("Not mappable", override.aes=list(colour="gray"))) +
-  scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
-  scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
+  # scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
+  # scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
 	theme(legend.position="right") +ggtitle('Leave-FGR-out') 
 
 
@@ -1698,8 +1693,8 @@ plot.validation.1 <- ggplot() +
   geom_sf(aes(geometry=prov_geom),fill=NA) +
   scale_linewidth_identity() +
   scale_fill_manual(values=colors, na.value='gray',name='Province') +
-  scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
-  scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
+  # scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
+  # scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
 	theme(legend.position="right") +ggtitle('Leave-province-out')
 
 
@@ -1707,12 +1702,12 @@ plot.validation.1 <- ggplot() +
 
 # Combine plots
 plot.all <- ggdraw() +
-  draw_plot(plot.validation.1, x = 0, y = 0, width = 0.50, height = 1) +
-  draw_plot(plot.validation.2, x = 0.49, y = 0, width = 0.55, height = 1) +
-  draw_plot_label(label = c("A", "B"), size = 15, x = c(0.01, 0.50), y = c(0.99,0.99)) +
+  draw_plot(plot.validation.1, x = 0.01, y = 0, width = 0.47, height = 1) +
+  draw_plot(plot.validation.2, x = 0.47, y = 0, width = 0.53, height = 1) +
+  draw_plot_label(label = c("A", "B"), size = 15, x = c(0.0, 0.455), y = c(0.99,0.99)) +
   theme(plot.background = element_rect(fill = "white", colour = NA))
 plot.all
-ggsave('results_paper/leave_out_validation.png', width=4600, heigh=1800, units='px')
+ggsave('results_paper/leave_out_validation.png', width=3400, heigh=1400, units='px')
 
 ```
 

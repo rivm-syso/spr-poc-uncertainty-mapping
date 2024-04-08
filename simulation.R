@@ -1,15 +1,19 @@
+#author: "Markus Viljanen"
+#date: "2024-03-19"
+
 library(INLA)
 library(sf)
 library(ggplot2)
 library(colorspace)
 library(cowplot)
 library(dplyr)
+library(tidyr)
 
-fn <- "results_simulation_new_4.csv"
+fn <- "results_simulation.csv"
 if (file.exists(fn)) file.remove(fn)
 
 # Simulation parameters
-for (i in seq(1,100)) {
+for (i in seq(1,200)) {
   print(sprintf("   Simulation %d", i))
   #i <- 1
   
@@ -26,7 +30,7 @@ for (i in seq(1,100)) {
   
   # Create mesh
   limits <- cbind(c(0,1,1,0,0), c(0,0,1,1,0))
-  mesh <- inla.mesh.2d(loc.domain=limits, cutoff=0.03, max.edge=c(0.03,0.12), offset=-0.03) #0.02 0.07
+  mesh <- inla.mesh.2d(loc.domain=limits, cutoff=0.03, max.edge=c(0.03,0.12), offset=-0.03) 
   
   # Create grid
   sf.boundary <- st_sfc(st_polygon(list(rbind(c(0,0), c(1,0), c(1,1), c(0,1), c(0,0)))))
@@ -77,11 +81,6 @@ for (i in seq(1,100)) {
   xy.obs <- data.frame(X=sample(1:N / N), Y=sample(1:N / N))
   
   # Run repeated samplings of the given simulation
-  #spatial.misalignment <- F
-  #measurement.error <- F
-  #confounded <- T
-  #control.z2 <- T
-  #spatial <- T
   for (spatial.misalignment in c(F,T)) {
     for (measurement.error in c(F,T)) {
       for (confounded in c(T)) {#c(F,T)
@@ -374,7 +373,7 @@ ggsave('results_paper/simulation.png', width=3000, heigh=1200, units='px')
 # Plot illustration of Kriging: Berkson & Classical type errors
 
 # True values of covariate Z at grid points
-Y.choice <- 0.90 #0.75
+Y.choice <- 0.80 #0.75
 sf.line <- data.frame(X=seq(0,1,0.001), Y=Y.choice)
 A.line <- inla.spde.make.A(mesh, loc=as.matrix(sf.line))
 # True Z1 and observation standard error
@@ -409,41 +408,59 @@ sf.obs.slice <- sf.obs %>% filter((Y > Y.choice-0.05) & (Y < Y.choice+0.05)) %>%
   mutate(Covariate=recode(Covariate, Z1.obs="X1.obs"))
 # Plot
 plot.line <- ggplot(sf.slice) + geom_line(aes(x=X,y=Value, col=Covariate)) + 
-  geom_ribbon(aes(x=X, ymax=Value+1.96*SD, ymin=Value-1.96*SD, fill=Covariate), alpha=0.2) +
+  geom_ribbon(aes(x=X, ymax=Value+1.96*SD, ymin=Value-1.96*SD, fill=Covariate), alpha=0.3) +
   geom_point(aes(x=X, y=Value, col=Covariate), data = sf.obs.slice) +
   geom_hline(yintercept=0, linetype = 'dotted') + theme(legend.position = "top") +
   scale_color_manual(name='Covariate',
                      breaks=c('X1.obs', 'X1.pred', 'X1.true'),
-                     values=c('X1.obs'='black', 
-                              'X1.pred'='seagreen3',
-                              'X1.true'='dodgerblue')) +
+                     labels=c(expression(paste(X[1],'*',(r))),expression(paste("E(",X[1](r),"|", D[1],")")),expression(X[1](r))),
+                     values=c('X1.obs'='blue', 
+                              'X1.pred'='orange',
+                              'X1.true'='blue')) +
   scale_fill_manual(name='Covariate',
                     breaks=c('X1.obs', 'X1.pred', 'X1.true'),
-                    values=c('X1.obs'='black', 
-                             'X1.pred'='seagreen3',
-                             'X1.true'='dodgerblue'), guide="none") + 
+                    labels=c(expression(paste(X[1],'*',(r))),expression(paste("E(",X[1](r),"|", D[1],")")),expression(X[1](r))),
+                    values=c('X1.obs'='blue', 
+                             'X1.pred'='orange',
+                             'X1.true'='blue'), guide="none") + 
   guides(color = guide_legend(override.aes = list(linetype = c(0, 1, 1), 
-                                                  shape=c(16,NA,NA))))
+                                                  shape=c(16,NA,NA)))) + 
+  xlab(expression(r))
 plot.line
 ggsave('results_paper/simulation_kriging.png', width=1500, heigh=900, units='px')
 
 
-#  geom_point(aes(x=X, y=Z1.obs), data=sf.obs.slice) +
-#  geom_line(aes(x=X, y=Value, col=Covariate), data=sf.grid.slice)
-## Visualize observed vs. predicted
-#plot(sf.obs$Z1.true, sf.obs$Z1.pred)
-#abline(coef = c(0,1))
-# Visualize parameters
-#plot(spde.result$marginals.range.nominal[[1]],t="l",xlab="r",ylab="")
-#abline(v=range0)
-#plot(spde.result$marginals.variance.nominal[[1]],t="l",xlab=expression(sigma),ylab="")
-#abline(v=sigma0)
-#plot(inla.smarginal(output$marginals.fixed[[1]]),t="l",xlab=expression(b[0]),ylab="")
-#abline(v=0)
-#plot(inla.smarginal(inla.tmarginal(function(x) 1/sqrt(x), output$marginals.hyperpar[[1]])),t="l",xlab=expression(sigma_epsilon),ylab="")
-#abline(v=sd.obs)
+# Load saved results
+fn <- "results_simulation.csv"
+df <- read.table(fn, header=T, sep=",", row.names=NULL)
+df$true <- b.Z1
 
+# Results from first simulation
+df %>% filter((Simulation == 1) & Confounded & Control.z2) %>% 
+  select(Spatial.Misalignment, Measurement.Error, 
+         Model, mean, sd, rmse.y, rmse.z1)
 
+# Summary of simulations: coefficient and predictive accuracy
+df %>% filter(Simulation <= 100) %>% filter(Confounded & Control.z2) %>%
+  group_by(Spatial.Misalignment, Measurement.Error, Model) %>% 
+  summarize(n=n(), 
+            mean.coef=round(mean(mean,na.rm=T),2), 
+            mean.coef.sd=round(mean(sd,na.rm=T),2),#sd.coef=round(sd(mean),2), 
+            rmse.coef=round(mean(sqrt((true-mean)**2), na.rm=T),2),  
+            rmse.y=round(mean(rmse.y),3), 
+            rmse.z1=round(mean(rmse.z1),3)) %>%
+  write.csv(file="results_paper/results_simulation.csv", row.names=F)
+
+# Plot estimated coefficients from joint vs. two-stage model
+df.subset <- df %>% filter(Confounded & Control.z2 & Spatial.Misalignment & Measurement.Error) %>% 
+  mutate(Model = factor(Model, levels=c("Two-Stage", "Joint")))
+plot <- ggplot(df.subset, aes(x=Simulation, y=mean, col=Model, group=Model)) + 
+  geom_point(position=position_dodge(width=0.5), size=2) +
+  geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
+  theme(legend.position="top", axis.text.x = element_text(angle = 90)) + 
+  scale_y_continuous(name='Estimated Coefficient') + geom_hline(yintercept=b.Z1, linetype='dashed') #+ 
+plot
+ggsave('results_paper/simulation_coef.png', width=3000, heigh=1200, units='px')
 
 
 
