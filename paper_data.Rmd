@@ -1,6 +1,6 @@
 ---
 title: "paper_data"
-author: "Makrus Viljanen"
+author: "Markus Viljanen"
 date: "2023-08-09"
 output: html_document
 ---
@@ -20,7 +20,8 @@ library(sf)
 ```
 
 ## Original LMF data set to LMF subset
-Fetch Netherlands boundaries from RIVM GIS server. Here as well as in the modelling code, all coordinates are in EPSG:28992 Projected coordinate system for Netherlands. 
+
+Fetch Netherlands boundaries from RIVM GIS server
 
 ```{r}
 conn <- dbConnect(PostgreSQL(), dbname="geodata", user = "ro", password="ro!geo", host = "geodatabase.rivm.nl")
@@ -47,8 +48,6 @@ replace.index <- grepl('/', df.abiotic$NAAM, fixed = TRUE)
 last.6 <- substr(naam, nchar(naam)-6+1, nchar(naam))
 df.abiotic[replace.index, "NAAM"] <- last.6[replace.index]
 # Lisa's fixes to coordinates 
-# This consisted of 24 plots of which the locations seemed to be outside of the Netherlands. The plotnames were found in the LMF plots, and for those the correct coordinates were taken from the LMF programme. 
-# There were also an additional 329 abiotic plots with a plot name that was in the LMF file, but where the coordinates did not match. In those cases the coordinates from the LMF programme were taken as well. 
 # Tostrams, Lisa <lisa.tostrams@rivm.nl>
 df.abiotic.2 <- read.csv('LMF/lmf_log_data_corrected_coords.csv') %>% 
   distinct(releve_nr, .keep_all=T) %>% 
@@ -171,7 +170,7 @@ grid.rect <- st_make_grid(NL,n=100,crs=st_crs(NL), what='polygons', square=T)
 grid.circle <- st_make_grid(NL,n=100,crs=st_crs(NL), what='centers')
 index <- which(lengths(st_within(grid.circle, NL)) > 0) #st_intersects(grid.rect, NL)
 # Create data frame
-sf.grid <- data.frame( grid.rect[index]) %>% st_as_sf(crs=st_crs(NL))
+sf.grid <- data.frame(grid.circle[index], grid.rect[index]) %>% st_as_sf(crs=st_crs(NL))
 sf.grid[c("X", "Y")] <- sf.grid %>% st_geometry %>% st_centroid() %>% st_coordinates()
 sf.grid$Plot <- factor(sprintf("Grid%d", 1:nrow(sf.grid)))
 ```
@@ -186,7 +185,7 @@ st_geometry(provincie) <- (provincie$geom - matrix(data=c(155000, 463000), ncol=
 
 sf.plots <- sf.plots %>% st_join(provincie , left=T, st_within)
 sf.grid <- sf.grid %>% st_join(provincie , left=T, st_within)
-# plot(provincie)
+#plot(provincie)
 ```
 
 Add GIS layers: FGR regio

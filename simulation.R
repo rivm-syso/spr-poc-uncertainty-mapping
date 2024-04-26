@@ -13,9 +13,8 @@ fn <- "results_simulation.csv"
 if (file.exists(fn)) file.remove(fn)
 
 # Simulation parameters
-for (i in seq(1,200)) {
+for (i in seq(1,200)) {  #i <- 1
   print(sprintf("   Simulation %d", i))
-  #i <- 1
   
   # Simulation parameters
   sd.obs <- sqrt(0.3)
@@ -368,6 +367,7 @@ plot.all <- ggdraw() +
   theme(plot.background = element_rect(fill = "white", colour = NA))
 plot.all
 ggsave('results_paper/simulation.png', width=3000, heigh=1200, units='px')
+ggsave('results_paper/simulation.tiff', width=3000, heigh=1200, units='px', compression="lzw")
 
 
 # Plot illustration of Kriging: Berkson & Classical type errors
@@ -428,6 +428,7 @@ plot.line <- ggplot(sf.slice) + geom_line(aes(x=X,y=Value, col=Covariate)) +
   xlab(expression(r))
 plot.line
 ggsave('results_paper/simulation_kriging.png', width=1500, heigh=900, units='px')
+ggsave('results_paper/simulation_kriging.tiff', width=1500, heigh=900, units='px', compression="lzw")
 
 
 # Load saved results
@@ -441,7 +442,7 @@ df %>% filter((Simulation == 1) & Confounded & Control.z2) %>%
          Model, mean, sd, rmse.y, rmse.z1)
 
 # Summary of simulations: coefficient and predictive accuracy
-df %>% filter(Simulation <= 100) %>% filter(Confounded & Control.z2) %>%
+df %>% filter(Confounded & Control.z2) %>%
   group_by(Spatial.Misalignment, Measurement.Error, Model) %>% 
   summarize(n=n(), 
             mean.coef=round(mean(mean,na.rm=T),2), 
@@ -453,7 +454,7 @@ df %>% filter(Simulation <= 100) %>% filter(Confounded & Control.z2) %>%
 
 # Plot estimated coefficients from joint vs. two-stage model
 df.subset <- df %>% filter(Confounded & Control.z2 & Spatial.Misalignment & Measurement.Error) %>% 
-  mutate(Model = factor(Model, levels=c("Two-Stage", "Joint")))
+  mutate(Model = factor(Model, levels=c("Two-Stage", "Joint"))) %>% filter(Simulation <= 100)
 plot <- ggplot(df.subset, aes(x=Simulation, y=mean, col=Model, group=Model)) + 
   geom_point(position=position_dodge(width=0.5), size=2) +
   geom_errorbar(position=position_dodge(width=0.5), aes(ymin=X0.025quant, ymax=X0.975quant)) +
@@ -461,6 +462,7 @@ plot <- ggplot(df.subset, aes(x=Simulation, y=mean, col=Model, group=Model)) +
   scale_y_continuous(name='Estimated Coefficient') + geom_hline(yintercept=b.Z1, linetype='dashed') #+ 
 plot
 ggsave('results_paper/simulation_coef.png', width=3000, heigh=1200, units='px')
+ggsave('results_paper/simulation_coef.tiff', width=3000, heigh=1200, units='px', compression="lzw")
 
 
 

@@ -1,6 +1,6 @@
 ---
 title: "Paper Codes"
-author: "Makrus Viljanen"
+author: "Markus Viljanen"
 date: "2023-08-09"
 output: html_document
 ---
@@ -35,7 +35,7 @@ species <- species.map$species
 ```
 
 Netherlands boundary shapefile
-Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. These coordinates are calculated from the center of the Netherlands in meters. For simplicity, we convert them to kilometers below. 
+Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. These coordinates are calculated from the center of the Netherlands in meters. We convert them to kilometers from the center below. 
 
 ```{r}
 NL <- st_read("data_paper/NL.shp")$geometry#st_simplify()
@@ -43,7 +43,6 @@ NL <- (NL - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/10
 ```
 
 Data for vegetation plots and abiotic measurements data
-Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. 
 
 ```{r}
 # Load field visit data
@@ -54,7 +53,6 @@ sf.plots[c("X", "Y")] <- sf.plots  %>% st_coordinates()
 ```
 
 Data for Netherlands grid
-Coordinates are in EPSG:28992, the Projected coordinate system for Netherlands. 
 
 ```{r}
 # Load Netherlands grid data
@@ -68,73 +66,7 @@ geoms <- data.frame(grid.circle[index], grid.rect[index])
 sf.grid <- cbind(df.grid, geoms) %>% st_as_sf(crs=st_crs(NL))
 ```
 
-##Plot grid
 
-```{r}
-colors = c("#1f77b4","#64a9d9","#bfe4ff",
-          "#ff7f0e","#ffae66","#ffddbf",
-          "#2ca02c","#6acf6a","#bfffbf",
-          "#d62627","#ea6d6e","#ffbfbf",
-          "#9466bd","#b88fde","#e0bfff")
-names(colors) = c('Closed estuaries',
- 'Dunes mainland',
- 'Dunes Wadden islands',
- 'Higher sandy soils East',
- 'Higher sandy soils North',
- 'Higher sandy soils South',
- 'Higher sandy soils Veluwe',
- 'Hill country Limburg ',
- 'Low peat Holland',
- 'Low peat North',
- 'River area ',
- 'Sea clay middle',
- 'Sea clay North',
- 'Sea clay South ',
- 'Tidal areas Zeeland')
-ggplot(NL) + geom_sf() +
-	geom_sf(aes(geometry=geometry.1, fill=lmf_english,linewidth=0.1,colour=""), data=sf.grid) +
-  scale_linewidth_identity() +
-  scale_fill_manual(values=colors, na.value='gray',name='Physical Geological Region') +
-  scale_colour_manual(values=NA) +
-  guides(colour=guide_legend("Not mappable", override.aes=list(colour="gray"))) +
-  scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
-  scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
-	theme(legend.position="right") +ggtitle('Physical Geographical Regions') 
-ggsave('results_paper/fgr.png', width=1600, heigh=1500, units='px')
-```
-
-```{r}
-prov_geom <- read_sf("provincies.gpkg")$geom
-prov_geom <- (prov_geom - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
-colors = c("#1f77b4","#aec7e8",
-          "#ff7f0e","#ffba78",
-          "#2ca02c","#98df8a",
-          "#d62627","#ff9896",
-          "#9466bd","#c5b0d5",
-          "#8c564b","#c49c94")
-names(colors) = c('Drenthe',
- 'Flevoland',
- 'Fryslân',
- 'Gelderland',
- 'Groningen',
- 'Limburg',
- 'Noord-Brabant',
- 'Noord-Holland',
- 'Overijssel',
- 'Utrecht',
- 'Zeeland',
- 'Zuid-Holland')
-ggplot() + 
-	geom_sf(aes(geometry=geometry.1, fill=naam,linewidth=0.1), data=sf.grid) +
-  geom_sf(aes(geometry=prov_geom),fill=NA) +
-  scale_linewidth_identity() +
-  scale_fill_manual(values=colors, na.value='gray',name='Province') +
-  scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
-  scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
-	theme(legend.position="right") +ggtitle('Provinces of the Netherlands')  
-ggsave('results_paper/provinces.png', width=1600, heigh=1200, units='px')
-
-```
 ## Plot field visits
 
 Translate landuse to English
@@ -168,6 +100,8 @@ ggplot(NL) + geom_sf() +
                              )) +
 	theme(legend.position="right") #+ggtitle('Grid of Netherlands: Landuse') 
 ggsave('results_paper/landuse.png', width=1600, heigh=1200, units='px')
+ggsave('results_paper/landuse.tiff', width=1600, heigh=1200, units='px', compression="lzw")
+
 ```
 
 Bar plot of landuse in grid cells vs. vegetation plots:
@@ -184,6 +118,7 @@ ggplot(data=f, aes(x=Var1, y=Freq, fill=Data)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   xlab('Landuse') + ylab('% of total') #+ ggtitle('Landuse: Grid of Netherlands vs. Field visits')
 ggsave('results_paper/landuse_vs_visit.png', width=1400, heigh=900, units='px')
+ggsave('results_paper/landuse_vs_visit.tiff', width=1400, heigh=900, units='px', compression="lzw")
 ```
 
 
@@ -195,18 +130,18 @@ sf.plots$has_abiotics <- !is.na(sf.plots$releve_nr)
 ```
 
 ```{r}
-sf.plots.rev <- sf.plots %>% arrange(has_abiotics)
 ggplot(NL) + geom_sf() +
 	geom_sf(aes(geometry=geometry.1), data=sf.grid) + 
 	#geom_sf(aes(geometry=geometry), shape=3, size=0.3, data=sf.grid) + 
-	geom_sf(aes(geometry=geometry, color=has_abiotics), shape=4, size=0.5, data=sf.plots.rev) + 
+	geom_sf(aes(geometry=geometry, color=has_abiotics), shape=4, size=0.5, 
+	        data=sf.plots %>% arrange(has_abiotics)) + 
 	theme(plot.title = element_text(hjust = 0.5), legend.title=element_text(size=10), 
 		legend.text=element_text(size=8), legend.position="right") +
 	scale_colour_manual(values=c("#377EB8", "#4DAF4A"), name="Abiotic measurements") +
   scale_fill_discrete(guide=guide_legend(reverse=T))
 	#ggtitle('Location of Field Visits and Abiotics') 
 ggsave('results_paper/visits.png', width=1400, heigh=1200, units='px')
-
+ggsave('results_paper/visits.tiff', width=1400, heigh=1200, units='px', compression="lzw")
 ```
 
 ## Spatial interpolation of common heather
@@ -298,6 +233,7 @@ plot2 <- ggplot(NL) + geom_sf() +
 
 plot_grid(plot1, plot2, nrow = 1)
 ggsave('results_paper/Struikhei.png', width=2000, heigh=1400, units='px')
+ggsave('results_paper/Struikhei.tiff', width=2000, heigh=1400, units='px', compression="lzw")
 ```
 
 
@@ -399,6 +335,7 @@ plot.all <- ggdraw() +
   theme(plot.background = element_rect(fill = "white", colour = NA))
 plot.all
 ggsave('results_paper/pH.png', width=2000, heigh=1400, units='px')
+ggsave('results_paper/pH.tiff', width=2000, heigh=1400, units='px', compression="lzw")
 ```
 
 Same plot with a third panel visualizing uncertainty of interpolated pH
@@ -408,6 +345,7 @@ plot3 <- ggplot(NL) + geom_sf() + geom_sf(aes(geometry=geometry.1, fill=pH.sd), 
   scale_fill_gradient(low='white', high='red', limits=c(0,1.11)) + ggtitle('Uncertainty pH') + theme(legend.position="bottom")
 plot_grid(plot1, plot2, plot3, nrow = 1) + theme(plot.background = element_rect(fill = "white", colour = NA)) #, plot3
 ggsave('results_paper/pH2.png', width=3000, heigh=1400, units='px')
+ggsave('results_paper/pH2.tiff', width=3000, heigh=1400, units='px', compression="lzw")
 ```
 
 Save interpolated pH for modelling
@@ -906,8 +844,6 @@ for (species.take in species) { #c("Gestreepte witbol")
 
 
 ## Experiments: training and validation
-It is also possible to download the results from https://zenodo.org/record/8261504
-In that case, place the downloaded files in the subfolder `data_paper/` and go to the `Results: import file` section below to import the results and create the plots. 
 
 ### Provinces 
 
@@ -999,7 +935,6 @@ for (species.take in species) {
 ```  
 
 Joint model (uncertain abiotics), save predictions and prevalences
- 
 
 ```{r}
 provincies <- sort(unique(sf.plots$naam))
@@ -1099,7 +1034,6 @@ for (species.take in species) {
 
 Two-stage model (certain abiotics), save predictions and prevalences
 
-
 ```{r}
 fgrs <- unique(sf.plots$Fys_geo_regio)
 fgrs <- sort(fgrs[!(fgrs %in% c("gtw", "gtz"))]) # gtw (1) and gtz (5) samples
@@ -1187,7 +1121,6 @@ for (species.take in species) {
 ```  
 
 Joint model (uncertain abiotics), save predictions and prevalences
-
 
 ```{r}
 fgrs <- unique(sf.plots$Fys_geo_regio)
@@ -1287,8 +1220,6 @@ for (species.take in species) {
 ## Combine and export data 
 
 Combine and export the results of fitting all models to data: 
-It is also possible to skip this cell and download the results from https://zenodo.org/record/8261504
-Place the data in the subfolder `data_paper/` and run the code below this cell to create the plots. 
 
 ```{r}
 # Model parameters and predictions in entire data set
@@ -1321,14 +1252,17 @@ c(list.files("prevalences_certain2", full.names=T),
   write.csv(file="data_paper/prevalences_fgr.csv", row.names=F)
 ```
 
-## Results: import file  
+## Results
+
+It is also possible to download the results from https://zenodo.org/record/8261504
+Place the data in the subfolder `data_paper/` and run the code below this cell. 
 
 ```{r}
 results <- read.csv("data_paper/results.csv")
 #results <- read.csv("data_paper/results.csv", col.names=c("species", "meta", "model", "term", "ID", "mean", "sd", "X0.025quant", "X0.5quant", "X0.975quant")) # LSF cluster results
 ```
 
-## Results: crowberry example
+## Crowberry example
 
 ```{r}
 species.take <- "Kraaihei" #Gewoon reukgras, Engels raaigras, Pitrus, Duizendbland, Jacobskruiskruid
@@ -1423,6 +1357,7 @@ plot.all <- ggdraw() +
   draw_plot_label(label = c("A", "B", "C", "D"), size = 15, x = c(0.03, 0.03, 0.79, 0.03), y = c(0.96, 0.70, 0.70, 0.37))
 plot.all
 ggsave('results_paper/species_parameters.png', width=2000, heigh=2500, units='px')
+ggsave('results_paper/species_parameters.tiff', width=2000, heigh=2500, units='px', compression="lzw")
 ```
 
 Map of observed vs. predicted SDM from both models, probability scale
@@ -1462,6 +1397,7 @@ plot.all <- ggdraw() +
   draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 15, x = c(0.00, 0.33, 0.66, 0.33, 0.66), y = c(1.00, 1.00, 1.00, 0.50, 0.50))
 plot.all
 ggsave('results_paper/species_SDM_y.png', width=3200, heigh=3000, units='px')
+ggsave('results_paper/species_SDM_y.tiff', width=3200, heigh=3000, units='px', compression="lzw")
 ```
 
 Map of observed vs. predicted SDM from both models, log-odds scale
@@ -1503,7 +1439,7 @@ plot.all <- ggdraw() +
   draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 15, x = c(0.00, 0.33, 0.66, 0.33, 0.66), y = c(1.00, 1.00, 1.00, 0.50, 0.50))
 plot.all
 ggsave('results_paper/species_SDM_logodds.png', width=3200, heigh=3000, units='px')
-
+ggsave('results_paper/species_SDM_logodds.tiff', width=3200, heigh=3000, units='px', compression="lzw")
 ```
 
 Map of observed vs. predicted abiotics from both models
@@ -1543,6 +1479,7 @@ plot.all <- ggdraw() +
   draw_plot(plot5, x = 0.66, y = 0, width = 0.33, height = .5) +
   draw_plot_label(label = c("A", "B", "C", "D", "E"), size = 15, x = c(0.00, 0.33, 0.66, 0.33, 0.66), y = c(1.00, 1.00, 1.00, 0.50, 0.50))
 ggsave(sprintf('results_paper/species_%s.png', var), width=3200, heigh=3000, units='px')
+ggsave(sprintf('results_paper/species_%s.tiff', var), width=3200, heigh=3000, units='px', compression="lzw")
 }
 ```
 
@@ -1566,10 +1503,15 @@ plot.scatter <- ggplot() + geom_point(aes(x=`Two-Stage Model`, y=`Joint Model`),
      facet_wrap( ~ type + model, ncol = 3, scales="free") #+ ggtitle('Predicted Log-Odds (SDM) and \nPredicted Mean (Abiotics) at Grid Cells')
 plot.scatter
 ggsave('results_paper/species_scatter.png', width=1800, heigh=2400, units='px')
+ggsave('results_paper/species_scatter.tiff', width=1800, heigh=2400, units='px', compression="lzw")
 ```
 
 
 ## Results: all species
+
+```{r}
+results <- read.csv("data_paper/results.csv")
+```
 
 Abiotic parameters for all species two-stage vs. joint model
 
@@ -1589,6 +1531,7 @@ plot.abiotics.all <- ggplot(terms.plot, aes(x=ID, y=mean, col=meta, group=meta))
   facet_wrap( ~ species, ncol = 5)#, scales="free"
 plot.abiotics.all
 ggsave('results_paper/all_abiotics.png', width=2400, heigh=4000, units='px')
+ggsave('results_paper/all_abiotics.tiff', width=2400, heigh=4000, units='px', compression="lzw")
 ```
 
 Table of correlations between predictions in each grid cell of two-stage vs. joint model
@@ -1623,7 +1566,7 @@ ggplot(compare.cor, aes(x=cor)) +
   ylab("Number of Species") +xlab("Pearson Correlation Coefficient") +
   facet_wrap( ~ model, ncol = 3)  #+ggtitle('Correlation between Certain vs. Uncertain Abiotic Model Predictions')
 ggsave('results_paper/species_correlation.png', width=2000, heigh=1200, units='px')
-
+ggsave('results_paper/species_correlation.tiff', width=2000, heigh=1200, units='px', compression="lzw")
 ```
 
 Table of correlations between abiotic parameters in each species of two-stage vs. joint model
@@ -1644,31 +1587,57 @@ compare.cor
 Validation set illustration
 
 ```{r}
-colors = c("#1f77b4","#64a9d9",
-          "#ff7f0e","#ff9e49","#ffbd84","#ffddbf",
-          "#2ca02c",
-          "#d62627","#ea6d6e",
-          "#8c564b",
-          "#9466bd","#b88fde","#e0bfff")
-names(colors) = c(
- 'Dunes mainland', 'Dunes Wadden islands',
- 'Higher sandy soils East', 'Higher sandy soils North', 'Higher sandy soils South', 'Higher sandy soils Veluwe',
- 'Hill country Limburg ',
- 'Low peat Holland', 'Low peat North',
- 'River area ',
- 'Sea clay middle', 'Sea clay North', 'Sea clay South ')
-plot.validation.2 <- ggplot(NL) + geom_sf() +
-	geom_sf(aes(geometry=geometry.1, fill=lmf_english,linewidth=0.1,colour=""), data=filter(sf.grid, lmf_english!='Tidal areas Zeeland', lmf_english!='Closed estuaries')) +
+
+sf.grid$fgr <- factor(sf.grid$lmf_indeling, levels=c("afz", "duo", "duw", "hll", "hzn", "hzo", "hzv",
+                                                     "hzz", "lvh", "lvn", "riv", "zkm", "zkn", "zkz"))
+levels(sf.grid$fgr) <- list("Closed estuaries"="afz",
+                         "Dunes mainland"="duo",
+                         "Dunes Wadden islands"="duw",
+                         "Tidal areas Wadden islands"="gtw",
+                         "Tidal areas Zeeland"="gtz",
+                         "Hill country Limburg"="hll",
+                         "Higher sandy soils North"="hzn",
+                         "Higher sandy soils East"="hzo",
+                         "Higher sandy soils Veluwe"="hzv",
+                         "Higher sandy soils South"="hzz",
+                         "Low peat Holland"="lvh",
+                         "Low peat North"="lvn",
+                         "River area"="riv",
+                         "Sea clay middle"="zkm",
+                         "Sea clay North"="zkn",
+                         "Sea clay South"="zkz")
+
+colors = c("Closed estuaries"="#d62627",
+           "Dunes mainland"="#ea6d6e",
+           "Dunes Wadden islands"="#ffbfbf",
+           "Tidal areas Wadden islands"="#1f77b4",
+           "Tidal areas Zeeland"="#64a9d9",
+           "Hill country Limburg"="#bfe4ff",
+           "Higher sandy soils North"="#ff7f0e",
+           "Higher sandy soils East"="#ffae66",
+           "Higher sandy soils Veluwe"="#bfffbf",
+           "Higher sandy soils South"="#ffddbf",
+           "Low peat Holland"="#6acf6a",
+           "Low peat North"="#2ca02c",
+           "River area"="#00BFC4",
+           "Sea clay middle"="#b88fde",
+           "Sea clay North"="#9466bd",
+           "Sea clay South"="#e0bfff")
+
+ggplot(NL) + geom_sf() +
+	geom_sf(aes(geometry=geometry.1, fill=fgr,linewidth=0.1,colour=""), data=sf.grid) +
   scale_linewidth_identity() +
-  scale_fill_manual(values=colors, na.value='gray',name='Physical Geological Region') +
+  scale_fill_manual(values=colors, na.value='gray',na.translate = F,name='Physical Geological Region') +
   scale_colour_manual(values=NA) +
   guides(colour=guide_legend("Not mappable", override.aes=list(colour="gray"))) +
-  # scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
-  # scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
-	theme(legend.position="right") +ggtitle('Leave-FGR-out') 
+	theme(legend.position="right") + ggtitle('Physical Geographical Regions') 
+ggsave('results_paper/fgr.png', width=2000, heigh=1400, units='px')
+ggsave('results_paper/fgr.tiff', width=2000, heigh=1400, units='px', compression="lzw")
 
+```
 
-prov_geom <- read_sf("provincies.gpkg")$geom
+```{r}
+prov_geom <- read_sf("data_paper/provincies.gpkg")$geom
 prov_geom <- (prov_geom - matrix(data=c(155000, 463000), ncol=2)) * matrix(data=c(1/1000, 1/1000), ncol=2)
 colors = c("#1f77b4","#aec7e8",
           "#ff7f0e","#ffba78",
@@ -1688,27 +1657,48 @@ names(colors) = c('Drenthe',
  'Utrecht',
  'Zeeland',
  'Zuid-Holland')
-plot.validation.1 <- ggplot() + 
+ggplot() + 
 	geom_sf(aes(geometry=geometry.1, fill=naam,linewidth=0.1), data=sf.grid) +
   geom_sf(aes(geometry=prov_geom),fill=NA) +
   scale_linewidth_identity() +
   scale_fill_manual(values=colors, na.value='gray',name='Province') +
-  # scale_y_continuous(breaks = c(-100,0, 100), labels = c("363000","463000", "563000")) +
-  # scale_x_continuous(breaks = c(-100,0, 100), labels = c("55000","155000", "255000")) +
-	theme(legend.position="right") +ggtitle('Leave-province-out')
+  theme(legend.position="right") +ggtitle('Provinces of the Netherlands')  
+ggsave('results_paper/provinces.png', width=1700, heigh=1200, units='px')
+ggsave('results_paper/provinces.tiff', width=1700, heigh=1200, units='px', compression="lzw")
+
+```
 
 
+```{r}
+# Leave province out
+sf.grid$provincie <- as.factor(sf.grid$naam)
+plot.validation.1 <- ggplot(sf.grid) +
+	geom_sf(aes(geometry=geometry.1, fill=provincie)) + 
+	geom_sf(fill=NA, data=NL) +
+  scale_fill_discrete(name = "Province") +
+	ggtitle('Leave-province-out')
 
+# Leave FGR region out
+sf.grid$fgr <- factor(sf.grid$lmf_indeling, levels=c("afz", "duo", "duw", "hll", "hzn", "hzo", "hzv",
+                                                     "hzz", "lvh", "lvn", "riv", "zkm", "zkn", "zkz"))
+plot.validation.2 <- ggplot(sf.grid) +
+	geom_sf(aes(geometry=geometry.1, fill=fgr)) + 
+	geom_sf(fill=NA, data=NL) +
+  scale_fill_manual(name = "FGR", values=c("afz"="lightseagreen", "duo"="darkgoldenrod", "duw"="darkgoldenrod1", "hll"="forestgreen", 
+                                           "hzn"="wheat1", "hzo"="wheat2", "hzv"="wheat3", "hzz"="wheat4", 
+                                           "lvh"="darkseagreen", "lvn"="darkseagreen1", "riv"="steelblue", 
+                                           "zkm"="snow2", "zkn"="snow3", "zkz"="snow4")) +
+	ggtitle('Leave-FGR-out')
 
 # Combine plots
 plot.all <- ggdraw() +
-  draw_plot(plot.validation.1, x = 0.01, y = 0, width = 0.47, height = 1) +
-  draw_plot(plot.validation.2, x = 0.47, y = 0, width = 0.53, height = 1) +
-  draw_plot_label(label = c("A", "B"), size = 15, x = c(0.0, 0.455), y = c(0.99,0.99)) +
+  draw_plot(plot.validation.1, x = 0, y = 0, width = 0.53, height = 1) +
+  draw_plot(plot.validation.2, x = 0.53, y = 0, width = 0.47, height = 1) +
+  draw_plot_label(label = c("A", "B"), size = 15, x = c(0.01, 0.53), y = c(0.99,0.99)) +
   theme(plot.background = element_rect(fill = "white", colour = NA))
 plot.all
-ggsave('results_paper/leave_out_validation.png', width=3400, heigh=1400, units='px')
-
+ggsave('results_paper/leave_out_validation.png', width=2500, heigh=1300, units='px')
+ggsave('results_paper/leave_out_validation.tiff', width=2500, heigh=1300, units='px', compression="lzw")
 ```
 
 ## Results: training and validation
@@ -1746,7 +1736,7 @@ ggplot(rmse.both  %>% pivot_wider(names_from = meta, values_from = rmse)) +
    coord_cartesian(ylim=c(0.03,0.5), xlim=c(0.03,0.5)) + facet_wrap( ~ validation, ncol = 2) #+
   #ggtitle('Species validation RMSE: Certain vs. Uncertain Abiotics')
 ggsave('results_paper/rmse_comparison.png', width=1200, heigh=800, units='px')
-
+ggsave('results_paper/rmse_comparison.tiff', width=1200, heigh=800, units='px', compression="lzw")
 ```
 
 Compare predicted and observed prevalence in each province:
@@ -1783,6 +1773,7 @@ plot.all <- ggplot(prevalences.both, aes(x=naam, y=mean, col=meta, group=meta)) 
   facet_wrap( ~ species, ncol = 5, scales='free_y')
 plot.all
 ggsave('results_paper/all_prevalences.png', width=2800, heigh=4000, units='px')
+ggsave('results_paper/all_prevalences.tiff', width=2800, heigh=4000, units='px', compression="lzw")
 ```
 
 
@@ -1820,6 +1811,7 @@ plot.all <- ggplot(prevalences.both, aes(x=naam, y=mean, col=meta, group=meta)) 
   facet_wrap( ~ species, ncol = 5, scales='free_y')
 plot.all
 ggsave('results_paper/all_prevalences2.png', width=2800, heigh=4000, units='px')
+ggsave('results_paper/all_prevalences2.tiff', width=2800, heigh=4000, units='px', compression="lzw")
 ```
 
 
